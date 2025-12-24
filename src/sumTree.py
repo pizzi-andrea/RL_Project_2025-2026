@@ -33,23 +33,38 @@ class SumTree:
     def is_leaf(self, node:int) -> bool:
         return self.get_dx(node) == -1 and self.get_sx(node) == -1
     
-    def _update(self):
-        pass
+    
+                
 
-    def store(self, transition:Transition):
+
+
+    def store(self, transition:Transition, priority:float):
+        self.buffer[self.buffer_idx] = transition
+
+        self._update(self.buffer_idx)
+        self.buffer_idx = (self.buffer_idx + 1)%len(self.buffer)
+        
+
+        
+
+
         pass
 
     def clear(self):
-        pass
+        self.priority = np.
 
     def maximum(self):
-        pass 
+        pass
 
     def minimum(self):
         pass 
     
     def get_priority(self, node:int):
-        pass
+        if node not in self.indexs:
+            return 0
+        
+        return self.priority[node]
+    
 
     
     
