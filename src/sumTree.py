@@ -1,21 +1,56 @@
-
-class BinNode:
-    def __init__(self, value, data=None) -> None:
-        self.sx = None
-        self.dx = None
-        self.v = value
-        self.data = data
-
+import numpy as np
+from transition import Transition
 
 class SumTree:
-    def __init__(self) -> None:
-        self.root = BinNode(0, None)
+    """SumTree buffer for PER algorithm"""
+    def __init__(self, size:int) -> None:
+        self.size = size
+        
+        self.priority = np.zeros(2*size - 1, dtype=np.float16)
+        self.buffer = np.ndarray(shape=size, dtype=np.object_)
+        self.indexs = np.arange(start=0, stop=len(self.priority), dtype=np.uint32)
+        self.buffer_idx = 0
+
     
-    def insert_dx(self, node:BinNode):
-        pass
+    def get_dx(self, parent:int) -> int:
+        """Get the right leaf of the parent node if it exists, otherwise return None"""
+        i = parent*2 + 2
+        if i not in self.indexs:
+            return -1
+        return i 
     
-    def insert_sx(self, node:BinNode):
+    def get_sx(self, parent:int) -> int:
+        """Get the left leaf of the parent node if it exists, otherwise return None"""
+        i = parent*2 + 1
+        if i not in self.indexs:
+            return -1
+        return i 
+    
+    def get_parent(self, leaf:int) -> int:
+        """Get parent node"""
+        return (leaf - 1)//2
+    
+    def is_leaf(self, node:int) -> bool:
+        return self.get_dx(node) == -1 and self.get_sx(node) == -1
+    
+    def _update(self):
         pass
+
+    def store(self, transition:Transition):
+        pass
+
+    def clear(self):
+        pass
+
+    def maximum(self):
+        pass 
+
+    def minimum(self):
+        pass 
+    
+    def get_priority(self, node:int):
+        pass
+
     
     
 

@@ -1,6 +1,18 @@
+from dataclasses import dataclass
+import numpy as np
+
+
+@dataclass(frozen=True, slots=True)
 class Transition:
-    def __init__(self, x_t, a_t, r_t, x_tn) -> None:
-        self.state = x_t
-        self.action = a_t 
-        self.reward = r_t
-        self.next_state = x_tn 
+    """
+    Data structure for single system transition 
+    """
+    state: np.ndarray
+    action: int
+    reward: float
+    next_state: np.ndarray
+
+
+if __name__ == "__main__":
+    t = Transition(state=np.array([0,1]), action=1, reward=1.0, next_state=np.array([1,0]))
+    print(t.state)
