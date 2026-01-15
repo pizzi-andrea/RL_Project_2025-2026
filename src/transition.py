@@ -15,4 +15,5 @@ class Transition:
 
 if __name__ == "__main__":
     t = Transition(state=np.array([0,1]), action=1, reward=1.0, next_state=np.array([1,0]))
-    print(t.state)
+    
+    print(t)

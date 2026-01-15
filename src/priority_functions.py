@@ -7,6 +7,7 @@ class PriorityExperienceReplay(ABC):
     def __init__(self, buffer:SumTree):
         super().__init__()
         self.replay = None
+        self.buffer = buffer
         pass
     
     @abstractmethod
