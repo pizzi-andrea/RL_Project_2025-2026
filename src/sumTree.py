@@ -43,7 +43,11 @@ class SumTree:
         """map index buffer to search tree"""
         if idx < 0 or idx > len(self.buffer): raise IndexError
         return (self.size - 1) + self.buffer_idx
-            
+    
+    def _idx_to_buffer(self, idx:int) -> int:
+        """Map index tree to buffer index"""
+        if idx < 0 or idx > len(self.priority): raise IndexError
+        return (idx + 1) - self.size
 
     def store(self, transition:Transition, priority:float):
         """Insert new entry in the buffer"""
@@ -77,7 +81,17 @@ class SumTree:
             return 0.0
         
         return self.priority[node]
+
+    def update_priority(self, start_leaf:int, new_priority:float) -> None:
+        if self.is_leaf(start_leaf):
+            self.priority[start_leaf] = new_priority
+            self._update(start_leaf)
+            return
+        raise IndexError
     
+    def get(self, value:int):
+        pass
+            
     
 
     
