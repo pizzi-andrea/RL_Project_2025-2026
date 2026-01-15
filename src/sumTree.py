@@ -42,7 +42,7 @@ class SumTree:
     def _buffer_to_idx(self, idx:int) -> int:
         """map index buffer to search tree"""
         if idx < 0 or idx > len(self.buffer): raise IndexError
-        return (self.size - 1) + self.buffer_idx
+        return (self.size - 1) + idx
     
     def _idx_to_buffer(self, idx:int) -> int:
         """Map index tree to buffer index"""
@@ -89,8 +89,28 @@ class SumTree:
             return
         raise IndexError
     
-    def get(self, value:int):
-        pass
+    def get_transition(self, sum:float):
+        
+        sum_max = self.priority[0]
+        sum = min(sum, sum_max - 1e-4)
+        current_idx = 0
+
+        while not self.is_leaf(current_idx):
+            sx = self.get_sx(current_idx)
+
+            if sum <= self.priority[sx]:
+                current_idx = sx
+            else:
+                current_idx = self.get_dx(current_idx)
+                sum -= self.priority[sx]
+            
+            if current_idx > len(self.priority):
+                raise IndexError("leaf node not valid")
+        
+
+        buff_idx = self._idx_to_buffer(current_idx)
+    
+        return self.buffer[buff_idx], current_idx, buff_idx
             
     
 
