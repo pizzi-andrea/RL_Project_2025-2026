@@ -1,0 +1,347 @@
+# rssm_lightning.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, Tuple
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import lightning as L
+
+
+# -------------------------
+# Utils: Straight-through categorical + unimix
+# -------------------------
+
+def unimix_probs(probs: torch.Tensor, unimix: float = 0.01) -> torch.Tensor: #uniform noise addition
+    # probs: [..., K]
+    K = probs.shape[-1]
+    return (1 - unimix) * probs + unimix * (torch.ones_like(probs) / K)
+
+def st_onehot_from_logits(logits: torch.Tensor) -> torch.Tensor:
+    # Straight-through argmax one-hot sample from categorical logits
+    # logits: [..., K]
+    with torch.no_grad():
+        idx = torch.argmax(logits, dim=-1)
+        y_hard = F.one_hot(idx, num_classes=logits.shape[-1]).float() #1hot vector that represents the real choice of the latent state
+    probs = torch.softmax(logits, dim=-1)
+    # straight-through: forward discrete, backward continuous
+    return y_hard + (probs - probs.de
+                     tach()) # this is equal to y_hard in forward, but gradients are from probs in the backward pass
+
+def cat_kl_logits(q_logits: torch.Tensor, p_logits: torch.Tensor) -> torch.Tensor:
+    # KL(q || p) for categorical, computed from logits
+    q_logprob = F.log_softmax(q_logits, dim=-1) #posterior
+    p_logprob = F.log_softmax(p_logits, dim=-1) #prior
+    q_prob = torch.softmax(q_logits, dim=-1)
+    return (q_prob * (q_logprob - p_logprob)).sum(dim=-1) #discrete KL
+
+
+# -------------------------
+# CNN Encoder/Decoder for 64x64
+# -------------------------
+
+class ConvEncoder(nn.Module):
+    def __init__(self, in_ch: int = 3, out_dim: int = 1024):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(in_ch, 32, 4, 2, 1), nn.SiLU(),   # 64 -> 32
+            nn.Conv2d(32, 64, 4, 2, 1), nn.SiLU(),     # 32 -> 16
+            nn.Conv2d(64, 128, 4, 2, 1), nn.SiLU(),    # 16 -> 8
+            nn.Conv2d(128, 256, 4, 2, 1), nn.SiLU(),   # 8 -> 4
+            nn.Flatten(),
+            nn.Linear(256 * 4 * 4, out_dim),
+            nn.SiLU(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B,T,C,H,W] or [B,C,H,W]
+        if x.dim() == 5:
+            B, T, C, H, W = x.shape #T is the lenght of the temporal sequence
+            x = x.view(B * T, C, H, W)
+            y = self.net(x)
+            return y.view(B, T, -1) # [B*T, 1024] → [B, T, 1024]
+
+        return self.net(x)
+
+class ConvDecoder(nn.Module):
+    def __init__(self, in_dim: int, out_ch: int = 3):
+        super().__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(in_dim, 256 * 4 * 4),
+            nn.SiLU()
+        )
+        self.deconv = nn.Sequential(
+            nn.ConvTranspose2d(256, 128, 4, 2, 1), nn.SiLU(),  # 4->8
+            nn.ConvTranspose2d(128, 64, 4, 2, 1), nn.SiLU(),   # 8->16
+            nn.ConvTranspose2d(64, 32, 4, 2, 1), nn.SiLU(),    # 16->32
+            nn.ConvTranspose2d(32, out_ch, 4, 2, 1),           # 32->64
+            nn.Sigmoid()
+        )
+
+    def forward(self, feat: torch.Tensor) -> torch.Tensor:
+        # feat: [B,T,D] or [B,D]
+        if feat.dim() == 3:
+            B, T, D = feat.shape
+            z = self.fc(feat.view(B * T, D)).view(B * T, 256, 4, 4)
+            x = self.deconv(z).view(B, T, -1, 64, 64)
+            return x
+        z = self.fc(feat).view(-1, 256, 4, 4)
+        return self.deconv(z) #here deterministic decoder, not probabilistic
+
+
+# -------------------------
+# RSSM (discrete latent)
+# -------------------------
+
+@dataclass
+class RSSMState:
+    h: torch.Tensor      # [B,H]
+    z: torch.Tensor      # [B, L*K] (flattened one-hot blocks)
+    z_logits: torch.Tensor  # [B, L, K] (posterior or prior logits)
+
+class RSSM(nn.Module):
+    """
+    Dreamer-style RSSM:
+      h_t = GRU(h_{t-1}, [embed(z_{t-1}), embed(a_{t-1})])
+      prior:    p(z_t | h_t)
+      posterior q(z_t | h_t, enc(x_t))
+    """
+    def __init__( #x_t has shape [B,L,K]
+        self,
+        action_dim: int,
+        deter_dim: int = 1024, # deterministic hidden state dimension
+        stoch_latents: int = 32,   # L (number of discrete latent variables)
+        stoch_classes: int = 32,   # K (number of classes per latent variable)
+        embed_dim: int = 1024,
+        unimix: float = 0.01,
+    ):
+        super().__init__()
+        self.action_dim = action_dim
+        self.deter_dim = deter_dim
+        self.L = stoch_latents
+        self.K = stoch_classes
+        self.unimix = unimix
+
+        self.action_embed = nn.Sequential(nn.Linear(action_dim, embed_dim), nn.SiLU())
+        self.z_embed = nn.Sequential(nn.Linear(self.L * self.K, embed_dim), nn.SiLU()) #so that action and z have same dimension that is not too smal
+
+        self.gru = nn.GRUCell(input_size=2 * embed_dim, hidden_size=deter_dim) #input: [B,input_size], prev_h: [B,deter_dim] -> out: [B,deter_dim]
+
+        # prior logits from h
+        self.prior_net = nn.Sequential( # self.prior_net(h) -> logits of z
+
+            nn.Linear(deter_dim, deter_dim),
+            nn.SiLU(),
+            nn.Linear(deter_dim, self.L * self.K),
+        )
+        # posterior logits from [h, enc(x)]
+        self.post_net = nn.Sequential(
+            nn.Linear(deter_dim + embed_dim, deter_dim),
+            nn.SiLU(),
+            nn.Linear(deter_dim, self.L * self.K),
+        )
+
+    def init_state(self, batch_size: int, device=None) -> RSSMState:
+        device = device or next(self.parameters()).device
+        h = torch.zeros(batch_size, self.deter_dim, device=device)
+        z_logits = torch.zeros(batch_size, self.L, self.K, device=device)
+        z = torch.zeros(batch_size, self.L * self.K, device=device)
+        return RSSMState(h=h, z=z, z_logits=z_logits)
+
+    def _logits_to_st_z(self, logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]: #conversion logit-> discrete z
+        # logits: [B,L*K] -> [B,L,K]
+        logits = logits.view(-1, self.L, self.K)
+        probs = torch.softmax(logits, dim=-1) #softmax to obtain a probability
+        probs = unimix_probs(probs, unimix=self.unimix) #unimix that adds some uniform noise
+        # incorporate unimix back into logits (stable)
+        logits = torch.log(probs.clamp_min(1e-8)) # stable logits after unimix
+        z_st = st_onehot_from_logits(logits)  # [B,L,K] z discrete but derivable
+        z_flat = z_st.view(-1, self.L * self.K)
+        return z_flat, logits
+
+    def imagine_step(self, prev: RSSMState, action: torch.Tensor) -> RSSMState:
+        # action: [B,A] one-hot or continuous vector
+        aemb = self.action_embed(action)
+        zemb = self.z_embed(prev.z)
+        inp = torch.cat([aemb, zemb], dim=-1)
+        h = self.gru(inp, prev.h)
+
+        prior_logits = self.prior_net(h)
+        z, prior_logits = self._logits_to_st_z(prior_logits)
+        return RSSMState(h=h, z=z, z_logits=prior_logits)
+
+    def observe_step(self, prev: RSSMState, action: torch.Tensor, enc_x: torch.Tensor) -> Tuple[RSSMState, torch.Tensor]: #it's like imagine step but with posterior (enc_x is the encoded observation)
+        # First update h with action and prev z, then compute posterior using enc_x
+        aemb = self.action_embed(action)
+        zemb = self.z_embed(prev.z)
+        inp = torch.cat([aemb, zemb], dim=-1)
+        h = self.gru(inp, prev.h)
+
+        prior_logits = self.prior_net(h).view(-1, self.L, self.K)
+
+        post_in = torch.cat([h, enc_x], dim=-1)
+        post_logits = self.post_net(post_in).view(-1, self.L, self.K)
+
+        # sample z from posterior (straight-through)
+        post_probs = unimix_probs(torch.softmax(post_logits, dim=-1), unimix=self.unimix)
+        post_logits = torch.log(post_probs.clamp_min(1e-8))
+        z_st = st_onehot_from_logits(post_logits)
+        z_flat = z_st.view(-1, self.L * self.K)
+
+        state = RSSMState(h=h, z=z_flat, z_logits=post_logits)
+        # return prior_logits for KLs (that is needed for the training loss and needs prior and posterior)
+        return state, prior_logits 
+
+
+# -------------------------
+# World Model LightningModule
+# -------------------------
+
+class DreamerWorldModel(L.LightningModule):
+    def __init__(
+        self,
+        action_dim: int,
+        image_channels: int = 3,
+        deter_dim: int = 1024,
+        stoch_latents: int = 32,
+        stoch_classes: int = 32,
+        enc_dim: int = 1024,
+        lr: float = 3e-4,
+        beta_pred: float = 1.0,
+        beta_dyn: float = 1.0,
+        beta_rep: float = 0.1,
+        free_nats: float = 1.0,
+        unimix: float = 0.01,
+    ):
+        super().__init__()
+        self.save_hyperparameters() #saves all the arguments as hyperparameters of the model in self.hparams
+
+        self.encoder = ConvEncoder(in_ch=image_channels, out_dim=enc_dim)
+        self.rssm = RSSM(
+            action_dim=action_dim,
+            deter_dim=deter_dim,
+            stoch_latents=stoch_latents,
+            stoch_classes=stoch_classes,
+            embed_dim=enc_dim,
+            unimix=unimix,
+        )
+
+        feat_dim = deter_dim + stoch_latents * stoch_classes
+        self.decoder = ConvDecoder(in_dim=feat_dim, out_ch=image_channels)
+
+        self.reward_head = nn.Sequential(
+            nn.Linear(feat_dim, deter_dim),
+            nn.SiLU(),
+            nn.Linear(deter_dim, 1),
+        )
+        self.cont_head = nn.Sequential(
+            nn.Linear(feat_dim, deter_dim),
+            nn.SiLU(),
+            nn.Linear(deter_dim, 1),  # logits for Bernoulli
+        )
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+
+    def forward(self, obs: torch.Tensor, actions: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        obs:     [B,T,C,H,W] in [0,1]
+        actions: [B,T,A] (one-hot for discrete; or continuous vector)
+        We predict x_t, r_t, c_t using posterior states.
+        """
+        B, T, C, H, W = obs.shape
+        enc = self.encoder(obs)  # [B,T,enc_dim]
+
+        state = self.rssm.init_state(B, device=obs.device)
+
+        post_h = []
+        post_z = []
+        post_logits = []
+        prior_logits = []
+
+        # We usually start from t=0 with a dummy action; simplest: use actions[:,0] as first input
+        for t in range(T):
+            a_t = actions[:, t]
+            x_t = enc[:, t]
+            state, plogits = self.rssm.observe_step(state, a_t, x_t)
+            post_h.append(state.h)
+            post_z.append(state.z)
+            post_logits.append(state.z_logits)
+            prior_logits.append(plogits)
+
+        post_h = torch.stack(post_h, dim=1)          # [B,T,H]
+        post_z = torch.stack(post_z, dim=1)          # [B,T,L*K]
+        post_logits = torch.stack(post_logits, dim=1)  # [B,T,L,K]
+        prior_logits = torch.stack(prior_logits, dim=1) # [B,T,L,K]
+
+        feat = torch.cat([post_h, post_z], dim=-1)   # [B,T,feat_dim]
+        x_hat = self.decoder(feat)                  # [B,T,C,H,W]
+        r_hat = self.reward_head(feat).squeeze(-1)  # [B,T]
+        c_logits = self.cont_head(feat).squeeze(-1) # [B,T]
+
+        return {
+            "x_hat": x_hat,
+            "r_hat": r_hat,
+            "c_logits": c_logits,
+            "post_logits": post_logits,
+            "prior_logits": prior_logits,
+        }
+
+    def training_step(self, batch, batch_idx):
+        """
+        Expect batch dict with:
+          obs: [B,T,C,H,W] float in [0,1]
+          actions: [B,T,A]
+          rewards: [B,T] float
+          cont: [B,T] float {0,1} where 1 means 'episode continues' (not done)
+        """
+        obs = batch["obs"]
+        actions = batch["actions"]
+        rewards = batch["rewards"]
+        cont = batch["cont"]
+
+        out = self.forward(obs, actions)
+
+        # L_pred: reconstruction + reward + continue
+        # DreamerV3 uses symlog/symexp-twohot for reward; we start simple with MSE.
+        recon = F.binary_cross_entropy(out["x_hat"], obs, reduction="none").mean(dim=(2,3,4))  # [B,T]
+        reward_loss = F.mse_loss(out["r_hat"], rewards, reduction="none")                      # [B,T]
+        cont_loss = F.binary_cross_entropy_with_logits(out["c_logits"], cont, reduction="none")  # [B,T]
+        L_pred = (recon + reward_loss + cont_loss).mean()
+
+        # KLs with free nats (free bits)
+        # L_dyn: KL(sg(q) || p), L_rep: KL(q || sg(p))  :contentReference[oaicite:13]{index=13}
+        q_logits = out["post_logits"]
+        p_logits = out["prior_logits"]
+
+        # stop-grad variants
+        kl_dyn = cat_kl_logits(q_logits.detach(), p_logits)   # [B,T,L]
+        kl_rep = cat_kl_logits(q_logits, p_logits.detach())   # [B,T,L]
+
+        # sum over latents then mean
+        kl_dyn = kl_dyn.sum(dim=-1)  # [B,T]
+        kl_rep = kl_rep.sum(dim=-1)  # [B,T]
+
+        free = self.hparams.free_nats
+        kl_dyn = torch.clamp(kl_dyn, min=free).mean()
+        kl_rep = torch.clamp(kl_rep, min=free).mean()
+
+        loss = (
+            self.hparams.beta_pred * L_pred +
+            self.hparams.beta_dyn * kl_dyn +
+            self.hparams.beta_rep * kl_rep
+        )
+
+        self.log_dict({
+            "wm/loss": loss,
+            "wm/pred": L_pred,
+            "wm/kl_dyn": kl_dyn,
+            "wm/kl_rep": kl_rep,
+            "wm/recon": recon.mean(),
+            "wm/r_loss": reward_loss.mean(),
+            "wm/c_loss": cont_loss.mean(),
+        }, prog_bar=True)
+
+        return loss
