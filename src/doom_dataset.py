@@ -3,12 +3,12 @@ from PIL import Image
 from pathlib import Path
 from torch.utils.data import Dataset
 from torchvision.transforms import Compose, Resize, ToTensor, Normalize
-class CDD (Dataset):
-    def __init__(self, base_path):
+class DoomDataset (Dataset):
+    def __init__(self, base_path, resize=(64,64)):
         super().__init__()
         self.paths = []
         self.transformation = Compose([
-            Resize((64,64)),
+            Resize(resize),
             ToTensor(),
         ]) 
         for item in Path(base_path).glob('*'):
