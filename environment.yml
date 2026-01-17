@@ -18,6 +18,8 @@ dependencies: # conda dependences
     - matplotlib
     - seaborn
     - torchmetrics
+    - torchvision
+    - lightning
     - tqdm
 
 
