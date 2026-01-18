@@ -9,6 +9,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import lightning as L
 
+from typing import Optional
+from ..encoder.VAE import VAE
+
+
 
 # -------------------------
 # Utils: Straight-through categorical + unimix
@@ -27,8 +31,7 @@ def st_onehot_from_logits(logits: torch.Tensor) -> torch.Tensor:
         y_hard = F.one_hot(idx, num_classes=logits.shape[-1]).float() #1hot vector that represents the real choice of the latent state
     probs = torch.softmax(logits, dim=-1)
     # straight-through: forward discrete, backward continuous
-    return y_hard + (probs - probs.de
-                     tach()) # this is equal to y_hard in forward, but gradients are from probs in the backward pass
+    return y_hard + (probs - probs.detach()) # this is equal to y_hard in forward, but gradients are from probs in the backward pass
 
 def cat_kl_logits(q_logits: torch.Tensor, p_logits: torch.Tensor) -> torch.Tensor:
     # KL(q || p) for categorical, computed from logits
@@ -196,9 +199,77 @@ class RSSM(nn.Module):
 
 
 # -------------------------
-# World Model LightningModule
+# VAE adaptation
 # -------------------------
 
+
+class VAEEncoderAdapter(nn.Module):
+    """
+    Prende immagini [B,T,3,H,W] o [B,3,H,W] e ritorna enc_x.
+    Qui enc_x = mean del VAE (deterministico).
+    """
+    def __init__(self, vae: VAE, out_dim: Optional[int] = None):
+        super().__init__()
+        self.vae = vae
+        self.out_dim = out_dim
+        self.proj = None
+        if out_dim is not None and out_dim != vae.hparams.latent_dim:
+            self.proj = nn.Linear(vae.hparams.latent_dim, out_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B,T,C,H,W] oppure [B,C,H,W]
+        if x.dim() == 5:
+            B, T, C, H, W = x.shape
+            x = x.view(B * T, C, H, W)
+            _, mean, _ = self.vae(x)  # mean: [B*T, latent_dim]
+            if self.proj is not None:
+                mean = self.proj(mean)
+            return mean.view(B, T, -1)
+        else:
+            _, mean, _ = self.vae(x)
+            if self.proj is not None:
+                mean = self.proj(mean)
+            return mean
+
+
+class VAEDecoderAdapter(nn.Module):
+    """
+    Prende feat = [h,z] e produce immagine usando il decoder del VAE.
+    Aggiunge un layer nuovo che mappa feat_dim -> latent_dim.
+    """
+    def __init__(self, vae: VAE, feat_dim: int):
+        super().__init__()
+        self.vae = vae
+        latent_dim = vae.hparams.latent_dim
+        self.feat_to_latent = nn.Sequential(
+            nn.Linear(feat_dim, latent_dim),
+            nn.SiLU(),
+        )
+
+    def forward(self, feat: torch.Tensor) -> torch.Tensor:
+        # feat: [B,T,D] oppure [B,D]
+        if feat.dim() == 3:
+            B, T, D = feat.shape
+            z = self.feat_to_latent(feat.view(B * T, D))          # [B*T, latent_dim]
+            z_j = self.vae.z_project(z).view(B * T, 256, 15, 20)  # usa pesi pretrainati
+            x = self.vae.decoder(z_j).view(B, T, 3, 240, 320)     # output VAE: 320x240
+            return x
+        else:
+            z = self.feat_to_latent(feat)
+            z_j = self.vae.z_project(z).view(-1, 256, 15, 20)
+            return self.vae.decoder(z_j)
+
+
+def load_vae_checkpoint(vae: VAE, ckpt_path: str, map_location="cpu") -> None:
+    ckpt = torch.load(ckpt_path, map_location=map_location)
+    state = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
+    # Lightning salva spesso con prefissi, ma nel vostro VAE dovrebbe matchare già.
+    vae.load_state_dict(state, strict=False)
+
+
+# -------------------------
+# World Model LightningModule
+# -------------------------
 class DreamerWorldModel(L.LightningModule):
     def __init__(
         self,
@@ -214,22 +285,57 @@ class DreamerWorldModel(L.LightningModule):
         beta_rep: float = 0.1,
         free_nats: float = 1.0,
         unimix: float = 0.01,
+        # --- nuove opzioni VAE ---
+        use_pretrained_vae: bool = False,
+        vae_ckpt_path: Optional[str] = None,
+        vae_latent_dim: int = 128,
+        freeze_vae: bool = True,
+        # se vuoi che enc_x sia esattamente latent_dim del VAE, imposta enc_dim=vae_latent_dim
     ):
         super().__init__()
-        self.save_hyperparameters() #saves all the arguments as hyperparameters of the model in self.hparams
+        self.save_hyperparameters()
 
-        self.encoder = ConvEncoder(in_ch=image_channels, out_dim=enc_dim)
+        self.use_pretrained_vae = use_pretrained_vae
+
+        # RSSM (embed_dim deve matchare la dimensione di enc_x)
+        # Se usi VAE, il modo più semplice è enc_dim == vae_latent_dim
+        rssm_embed_dim = enc_dim
+
         self.rssm = RSSM(
             action_dim=action_dim,
             deter_dim=deter_dim,
             stoch_latents=stoch_latents,
             stoch_classes=stoch_classes,
-            embed_dim=enc_dim,
+            embed_dim=rssm_embed_dim,
             unimix=unimix,
         )
 
         feat_dim = deter_dim + stoch_latents * stoch_classes
-        self.decoder = ConvDecoder(in_dim=feat_dim, out_ch=image_channels)
+
+        if use_pretrained_vae:
+            assert vae_ckpt_path is not None, "Se use_pretrained_vae=True devi passare vae_ckpt_path"
+            vae = VAE(latent_dim=vae_latent_dim)
+            load_vae_checkpoint(vae, vae_ckpt_path, map_location="cpu")
+            self.vae = vae
+
+            if freeze_vae:
+                for p in self.vae.parameters():
+                    p.requires_grad = False
+
+            # encoder: enc_x = mean (dimensione latent_dim o proiettata a enc_dim)
+            self.encoder = VAEEncoderAdapter(self.vae, out_dim=enc_dim)
+
+            # decoder: usa decoder VAE, aggiungendo solo feat->latent
+            self.decoder = VAEDecoderAdapter(self.vae, feat_dim=feat_dim)
+
+            # con VAE l'immagine è 240x320 (come nel vostro VAE)
+            self.obs_h = 240
+            self.obs_w = 320
+        else:
+            self.encoder = ConvEncoder(in_ch=image_channels, out_dim=enc_dim)
+            self.decoder = ConvDecoder(in_dim=feat_dim, out_ch=image_channels)
+            self.obs_h = 64
+            self.obs_w = 64
 
         self.reward_head = nn.Sequential(
             nn.Linear(feat_dim, deter_dim),
@@ -239,47 +345,40 @@ class DreamerWorldModel(L.LightningModule):
         self.cont_head = nn.Sequential(
             nn.Linear(feat_dim, deter_dim),
             nn.SiLU(),
-            nn.Linear(deter_dim, 1),  # logits for Bernoulli
+            nn.Linear(deter_dim, 1),
         )
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
 
     def forward(self, obs: torch.Tensor, actions: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """
-        obs:     [B,T,C,H,W] in [0,1]
-        actions: [B,T,A] (one-hot for discrete; or continuous vector)
-        We predict x_t, r_t, c_t using posterior states.
-        """
         B, T, C, H, W = obs.shape
-        enc = self.encoder(obs)  # [B,T,enc_dim]
+
+        # enc: [B,T,enc_dim]
+        enc = self.encoder(obs)
 
         state = self.rssm.init_state(B, device=obs.device)
 
-        post_h = []
-        post_z = []
-        post_logits = []
-        prior_logits = []
+        post_h, post_z, post_logits, prior_logits = [], [], [], []
 
-        # We usually start from t=0 with a dummy action; simplest: use actions[:,0] as first input
         for t in range(T):
             a_t = actions[:, t]
-            x_t = enc[:, t]
+            x_t = enc[:, t]  # enc_x
             state, plogits = self.rssm.observe_step(state, a_t, x_t)
             post_h.append(state.h)
             post_z.append(state.z)
             post_logits.append(state.z_logits)
             prior_logits.append(plogits)
 
-        post_h = torch.stack(post_h, dim=1)          # [B,T,H]
-        post_z = torch.stack(post_z, dim=1)          # [B,T,L*K]
+        post_h = torch.stack(post_h, dim=1)            # [B,T,H]
+        post_z = torch.stack(post_z, dim=1)            # [B,T,L*K]
         post_logits = torch.stack(post_logits, dim=1)  # [B,T,L,K]
-        prior_logits = torch.stack(prior_logits, dim=1) # [B,T,L,K]
+        prior_logits = torch.stack(prior_logits, dim=1)# [B,T,L,K]
 
-        feat = torch.cat([post_h, post_z], dim=-1)   # [B,T,feat_dim]
-        x_hat = self.decoder(feat)                  # [B,T,C,H,W]
-        r_hat = self.reward_head(feat).squeeze(-1)  # [B,T]
-        c_logits = self.cont_head(feat).squeeze(-1) # [B,T]
+        feat = torch.cat([post_h, post_z], dim=-1)     # [B,T,feat_dim]
+        x_hat = self.decoder(feat)                    # [B,T,3,H,W] (H,W dipende da VAE o conv)
+        r_hat = self.reward_head(feat).squeeze(-1)    # [B,T]
+        c_logits = self.cont_head(feat).squeeze(-1)   # [B,T]
 
         return {
             "x_hat": x_hat,
@@ -290,13 +389,6 @@ class DreamerWorldModel(L.LightningModule):
         }
 
     def training_step(self, batch, batch_idx):
-        """
-        Expect batch dict with:
-          obs: [B,T,C,H,W] float in [0,1]
-          actions: [B,T,A]
-          rewards: [B,T] float
-          cont: [B,T] float {0,1} where 1 means 'episode continues' (not done)
-        """
         obs = batch["obs"]
         actions = batch["actions"]
         rewards = batch["rewards"]
@@ -304,25 +396,17 @@ class DreamerWorldModel(L.LightningModule):
 
         out = self.forward(obs, actions)
 
-        # L_pred: reconstruction + reward + continue
-        # DreamerV3 uses symlog/symexp-twohot for reward; we start simple with MSE.
+        # Ricostruzione immagini
         recon = F.binary_cross_entropy(out["x_hat"], obs, reduction="none").mean(dim=(2,3,4))  # [B,T]
         reward_loss = F.mse_loss(out["r_hat"], rewards, reduction="none")                      # [B,T]
-        cont_loss = F.binary_cross_entropy_with_logits(out["c_logits"], cont, reduction="none")  # [B,T]
+        cont_loss = F.binary_cross_entropy_with_logits(out["c_logits"], cont, reduction="none")# [B,T]
         L_pred = (recon + reward_loss + cont_loss).mean()
 
-        # KLs with free nats (free bits)
-        # L_dyn: KL(sg(q) || p), L_rep: KL(q || sg(p))  :contentReference[oaicite:13]{index=13}
         q_logits = out["post_logits"]
         p_logits = out["prior_logits"]
 
-        # stop-grad variants
-        kl_dyn = cat_kl_logits(q_logits.detach(), p_logits)   # [B,T,L]
-        kl_rep = cat_kl_logits(q_logits, p_logits.detach())   # [B,T,L]
-
-        # sum over latents then mean
-        kl_dyn = kl_dyn.sum(dim=-1)  # [B,T]
-        kl_rep = kl_rep.sum(dim=-1)  # [B,T]
+        kl_dyn = cat_kl_logits(q_logits.detach(), p_logits).sum(dim=-1)  # [B,T]
+        kl_rep = cat_kl_logits(q_logits, p_logits.detach()).sum(dim=-1)  # [B,T]
 
         free = self.hparams.free_nats
         kl_dyn = torch.clamp(kl_dyn, min=free).mean()
@@ -345,3 +429,14 @@ class DreamerWorldModel(L.LightningModule):
         }, prog_bar=True)
 
         return loss
+
+"""
+wm = DreamerWorldModel(
+    action_dim=A,
+    use_pretrained_vae=True,
+    vae_ckpt_path="vae.ckpt",
+    vae_latent_dim=128,
+    enc_dim=128,          # CONSIGLIATO: uguale al latent_dim del VAE
+    freeze_vae=True,
+)
+"""
