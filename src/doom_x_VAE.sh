@@ -10,7 +10,7 @@ doom_scenarios=(
   "VizdoomMyWayHome-v0"
 )
 
-episodes=(1 3 5 1 1 5 1)
+episodes=(8 24 40 8 8 40 8)
 
 dataset_name="Doom4VAE"
 
@@ -39,4 +39,3 @@ for idx in "${!episodes[@]}"; do
     -r True \
     -m False
 done
-

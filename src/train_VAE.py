@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 if __name__ == "__main__":
     
     
-    vae = VAE(latent_dim=512)
+    vae = VAE(latent_dim=64)
     
     data_train = DataLoader(DoomDataset("Doom4VAE/train", resize=(240,320)), batch_size=64, shuffle=True, num_workers=12)
     data_valid = DataLoader(DoomDataset("Doom4VAE/validation", resize=(240,320)), batch_size=64, shuffle=False, num_workers=12)

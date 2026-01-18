@@ -25,12 +25,13 @@ if __name__ == "__main__":
     args.env,
     render_mode="rgb_array",
     max_buttons_pressed=1,
+    frame_skip=10
     
     )
     
     args.metadata = args.metadata and not args.reload
 
-    agent = Random_Policy(env.action_space, 5)
+    agent = Random_Policy(env.action_space, 1)
     base_path = Path(args.dataset).joinpath(args.split)
     ids = 0
     init_episode = 0
