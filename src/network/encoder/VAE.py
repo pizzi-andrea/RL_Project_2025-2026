@@ -101,9 +101,9 @@ class VAE(L.LightningModule):
 
         self.log_dict(
             {
-                "train_loss": loss,
-                "train_recon": recon_loss,
-                "train_kl": kl_loss,
+                "validation_loss": loss,
+                "validation_recon": recon_loss,
+                "validation_kl": kl_loss,
             },
             prog_bar=True,
         )

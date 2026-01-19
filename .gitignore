@@ -209,3 +209,6 @@ __marimo__/
 
 # project
 
+_vizdoom/
+VAE_logs/
+_vizdoom.ini

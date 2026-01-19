@@ -11,34 +11,7 @@ import lightning as L
 
 from typing import Optional
 from ..encoder.VAE import VAE
-
-
-
-# -------------------------
-# Utils: Straight-through categorical + unimix
-# -------------------------
-
-def unimix_probs(probs: torch.Tensor, unimix: float = 0.01) -> torch.Tensor: #uniform noise addition
-    # probs: [..., K]
-    K = probs.shape[-1]
-    return (1 - unimix) * probs + unimix * (torch.ones_like(probs) / K)
-
-def st_onehot_from_logits(logits: torch.Tensor) -> torch.Tensor:
-    # Straight-through argmax one-hot sample from categorical logits
-    # logits: [..., K]
-    with torch.no_grad():
-        idx = torch.argmax(logits, dim=-1)
-        y_hard = F.one_hot(idx, num_classes=logits.shape[-1]).float() #1hot vector that represents the real choice of the latent state
-    probs = torch.softmax(logits, dim=-1)
-    # straight-through: forward discrete, backward continuous
-    return y_hard + (probs - probs.detach()) # this is equal to y_hard in forward, but gradients are from probs in the backward pass
-
-def cat_kl_logits(q_logits: torch.Tensor, p_logits: torch.Tensor) -> torch.Tensor:
-    # KL(q || p) for categorical, computed from logits
-    q_logprob = F.log_softmax(q_logits, dim=-1) #posterior
-    p_logprob = F.log_softmax(p_logits, dim=-1) #prior
-    q_prob = torch.softmax(q_logits, dim=-1)
-    return (q_prob * (q_logprob - p_logprob)).sum(dim=-1) #discrete KL
+from utils import unimix_probs, st_onehot_from_logits, cat_kl_logits
 
 
 # -------------------------
@@ -67,7 +40,6 @@ class ConvEncoder(nn.Module):
             return y.view(B, T, -1) # [B*T, 1024] → [B, T, 1024]
 
         return self.net(x)
-
 class ConvDecoder(nn.Module):
     def __init__(self, in_dim: int, out_ch: int = 3):
         super().__init__()
@@ -104,7 +76,7 @@ class RSSMState:
     z: torch.Tensor      # [B, L*K] (flattened one-hot blocks)
     z_logits: torch.Tensor  # [B, L, K] (posterior or prior logits)
 
-class RSSM(nn.Module):
+class RSSM(nn.Module): # need specific train loop
     """
     Dreamer-style RSSM:
       h_t = GRU(h_{t-1}, [embed(z_{t-1}), embed(a_{t-1})])
@@ -131,7 +103,7 @@ class RSSM(nn.Module):
         self.z_embed = nn.Sequential(nn.Linear(self.L * self.K, embed_dim), nn.SiLU()) #so that action and z have same dimension that is not too smal
 
         self.gru = nn.GRUCell(input_size=2 * embed_dim, hidden_size=deter_dim) #input: [B,input_size], prev_h: [B,deter_dim] -> out: [B,deter_dim]
-
+        self.loss_buffer = None
         # prior logits from h
         self.prior_net = nn.Sequential( # self.prior_net(h) -> logits of z
 
@@ -202,15 +174,19 @@ class RSSM(nn.Module):
 # VAE adaptation
 # -------------------------
 
+class VAEAdapter(nn.Module):
+    def __init__(self, vae: VAE):
+        self.vae = vae
+    
+    
 
-class VAEEncoderAdapter(nn.Module):
+class VAEEncoderAdapter(VAEAdapter):
     """
     Prende immagini [B,T,3,H,W] o [B,3,H,W] e ritorna enc_x.
     Qui enc_x = mean del VAE (deterministico).
     """
     def __init__(self, vae: VAE, out_dim: Optional[int] = None):
         super().__init__()
-        self.vae = vae
         self.out_dim = out_dim
         self.proj = None
         if out_dim is not None and out_dim != vae.hparams.latent_dim:
@@ -232,14 +208,13 @@ class VAEEncoderAdapter(nn.Module):
             return mean
 
 
-class VAEDecoderAdapter(nn.Module):
+class VAEDecoderAdapter(VAEAdapter):
     """
     Prende feat = [h,z] e produce immagine usando il decoder del VAE.
     Aggiunge un layer nuovo che mappa feat_dim -> latent_dim.
     """
     def __init__(self, vae: VAE, feat_dim: int):
         super().__init__()
-        self.vae = vae
         latent_dim = vae.hparams.latent_dim
         self.feat_to_latent = nn.Sequential(
             nn.Linear(feat_dim, latent_dim),
@@ -260,15 +235,9 @@ class VAEDecoderAdapter(nn.Module):
             return self.vae.decoder(z_j)
 
 
-def load_vae_checkpoint(vae: VAE, ckpt_path: str, map_location="cpu") -> None:
-    ckpt = torch.load(ckpt_path, map_location=map_location)
-    state = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
-    # Lightning salva spesso con prefissi, ma nel vostro VAE dovrebbe matchare già.
-    vae.load_state_dict(state, strict=False)
-
 
 # -------------------------
-# World Model LightningModule
+# World Model LightningModule - need use REP buffer - remove 
 # -------------------------
 class DreamerWorldModel(L.LightningModule):
     def __init__(
@@ -286,7 +255,7 @@ class DreamerWorldModel(L.LightningModule):
         free_nats: float = 1.0,
         unimix: float = 0.01,
         # --- nuove opzioni VAE ---
-        use_pretrained_vae: bool = False,
+        
         vae_ckpt_path: Optional[str] = None,
         vae_latent_dim: int = 128,
         freeze_vae: bool = True,
@@ -294,8 +263,6 @@ class DreamerWorldModel(L.LightningModule):
     ):
         super().__init__()
         self.save_hyperparameters()
-
-        self.use_pretrained_vae = use_pretrained_vae
 
         # RSSM (embed_dim deve matchare la dimensione di enc_x)
         # Se usi VAE, il modo più semplice è enc_dim == vae_latent_dim
@@ -312,11 +279,13 @@ class DreamerWorldModel(L.LightningModule):
 
         feat_dim = deter_dim + stoch_latents * stoch_classes
 
-        if use_pretrained_vae:
+        if vae_ckpt_path:
             assert vae_ckpt_path is not None, "Se use_pretrained_vae=True devi passare vae_ckpt_path"
             vae = VAE(latent_dim=vae_latent_dim)
-            load_vae_checkpoint(vae, vae_ckpt_path, map_location="cpu")
+            
+            
             self.vae = vae
+            self.vae.load_from_checkpoint(vae_ckpt_path, map_location='cpu')
 
             if freeze_vae:
                 for p in self.vae.parameters():
@@ -334,9 +303,10 @@ class DreamerWorldModel(L.LightningModule):
         else:
             self.encoder = ConvEncoder(in_ch=image_channels, out_dim=enc_dim)
             self.decoder = ConvDecoder(in_dim=feat_dim, out_ch=image_channels)
-            self.obs_h = 64
-            self.obs_w = 64
+            self.obs_h = 240
+            self.obs_w = 320
 
+        # controller
         self.reward_head = nn.Sequential(
             nn.Linear(feat_dim, deter_dim),
             nn.SiLU(),
