@@ -5,9 +5,9 @@ from lightning import Trainer
 from .rssm import DreamerWorldModel #cambiato path che dava problemi
 
 # ---- CONFIG ----
-CKPT = "src/network/encoder/vae.ckpt"   # <-- metti il path reale
+CKPT = "VAE_ckpts/epoch=249-step=31500.ckpt"   # <-- metti il path reale
 A = 6                          # <-- numero azioni
-LATENT_DIM = 128
+LATENT_DIM = 64
 T = 8
 BATCH = 2
 
