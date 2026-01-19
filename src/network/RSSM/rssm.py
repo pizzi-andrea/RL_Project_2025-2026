@@ -11,7 +11,7 @@ import lightning as L
 
 from typing import Optional
 from ..encoder.VAE import VAE
-from utils import unimix_probs, st_onehot_from_logits, cat_kl_logits
+from .utils import unimix_probs, st_onehot_from_logits, cat_kl_logits
 
 
 # -------------------------
@@ -176,6 +176,7 @@ class RSSM(nn.Module): # need specific train loop
 
 class VAEAdapter(nn.Module):
     def __init__(self, vae: VAE):
+        super().__init__()
         self.vae = vae
     
     
@@ -186,7 +187,7 @@ class VAEEncoderAdapter(VAEAdapter):
     Qui enc_x = mean del VAE (deterministico).
     """
     def __init__(self, vae: VAE, out_dim: Optional[int] = None):
-        super().__init__()
+        super().__init__(vae)
         self.out_dim = out_dim
         self.proj = None
         if out_dim is not None and out_dim != vae.hparams.latent_dim:
@@ -214,7 +215,7 @@ class VAEDecoderAdapter(VAEAdapter):
     Aggiunge un layer nuovo che mappa feat_dim -> latent_dim.
     """
     def __init__(self, vae: VAE, feat_dim: int):
-        super().__init__()
+        super().__init__(vae)
         latent_dim = vae.hparams.latent_dim
         self.feat_to_latent = nn.Sequential(
             nn.Linear(feat_dim, latent_dim),
@@ -281,11 +282,7 @@ class DreamerWorldModel(L.LightningModule):
 
         if vae_ckpt_path:
             assert vae_ckpt_path is not None, "Se use_pretrained_vae=True devi passare vae_ckpt_path"
-            vae = VAE(latent_dim=vae_latent_dim)
-            
-            
-            self.vae = vae
-            self.vae.load_from_checkpoint(vae_ckpt_path, map_location='cpu')
+            self.vae = VAE.load_from_checkpoint(vae_ckpt_path, map_location='cpu')
 
             if freeze_vae:
                 for p in self.vae.parameters():

@@ -27,7 +27,6 @@ def main():
     # --- crea il model con VAE ---
     wm = DreamerWorldModel(
         action_dim=A,
-        use_pretrained_vae=True,
         vae_ckpt_path=CKPT,
         vae_latent_dim=LATENT_DIM,
         enc_dim=LATENT_DIM,      # IMPORTANTISSIMO
