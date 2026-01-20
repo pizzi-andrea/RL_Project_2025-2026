@@ -1,5 +1,5 @@
 import numpy as np
-from transition import Transition
+from episode import Episode
 from typing import Callable
 
 class SumTree:
@@ -49,7 +49,7 @@ class SumTree:
         if idx < 0 or idx > len(self.priority): raise IndexError
         return (idx + 1) - self.size
 
-    def store(self, transition:Transition, priority:float):
+    def store(self, transition:Episode, priority:float):
         """Insert new entry in the buffer"""
         self.buffer[self.buffer_idx] = transition
         tree_idx = self._buffer_to_idx(self.buffer_idx)
@@ -89,7 +89,11 @@ class SumTree:
             return
         raise IndexError
     
-    def get_transition(self, sum:float):
+    def free_space(self) -> int:
+        """Return free space in buffer"""
+        return (self.buffer_idx + 1)
+
+    def get_transition(self, sum:float) -> tuple[Episode, int, int]:
         
         sum_max = self.priority[0]
         sum = min(sum, sum_max - 1e-4)
@@ -119,22 +123,4 @@ class SumTree:
 if __name__ == "__main__":
     tree = SumTree(9)
 
-    tree.store(
-        Transition(state=np.array([0,1]), action=1, reward=1.0, next_state=np.array([1,0])),
-        10
-    )
-
     
-    tree.store(
-        Transition(state=np.array([0,1]), action=1, reward=-1.0, next_state=np.array([1,0])),
-        5
-    )
-    tree.store(
-        Transition(state=np.array([0,1]), action=1, reward=-1.0, next_state=np.array([1,0])),
-        3
-    )
-
-
-    print(tree.get_priority(-10))
-    print(tree.is_leaf(-4))
-    print(tree.priority)

@@ -7,9 +7,9 @@ from transition import Transition
 
 class PriorityExperienceReplay(ABC):
 
-    def __init__(self, buffer:SumTree):
+    def __init__(self, buffer_size:SumTree):
         super().__init__()
-        self.buffer = buffer
+        self.buffer = SumTree(buffer_size)
         pass
     
     @abstractmethod
@@ -30,10 +30,13 @@ class PriorityExperienceReplay(ABC):
         """General information for debugging pourposes"""
         pass
 
+    def __len__(self):
+        return len(self.buffer)
+
 
 class CountBasedPriority(PriorityExperienceReplay):
-    def __init__(self, buffer: SumTree, beta):
-        super().__init__(buffer)
+    def __init__(self, buffer_size:int, beta):
+        super().__init__(buffer_size)
         if beta < 0 or beta > 1:
             raise ValueError("Beta value must in [0,1]")
         self.beta = beta
@@ -47,10 +50,12 @@ class CountBasedPriority(PriorityExperienceReplay):
         self.buffer.store(transition, pi)
         return idx
     
-    def get(self, b:int):
+    def get(self, b:int) -> tuple[list, list[int], list[int]]:
 
         P = self.buffer.get_priority(0)
         batch = np.ndarray(shape=(b), dtype=np.object_)
+        priority_idx = np.ndarray(shape=(b), dtype=np.int32)
+        buffer_idx = np.ndarray(shape=(b), dtype=np.int32)
         s = P/b
 
         for i in range(b):
@@ -62,15 +67,17 @@ class CountBasedPriority(PriorityExperienceReplay):
             
             self.counter[b_idx] += 1
             batch[i] = t
+            priority_idx[i] = p_idx
+            buffer_idx[i] = b_idx
 
-            new_p = self.beta**self.counter[b_idx]
+            new_p = 1.0 / np.sqrt(1.0 + self.counter[b_idx])
             self.buffer.update_priority(p_idx, new_p)
         
-        return batch
+        return batch, priority_idx, buffer_idx
     
     def info(self):
-        print(f"Priority probability: {replay.buffer.priority.tolist()[self.buffer.size:]}")
-        print(f"Number of visits: {replay.counter}")
+        print(f"Priority probability: {self.buffer.priority.tolist()[self.buffer.size:]}")
+        print(f"Number of visits: {self.counter}")
 
     def update(self, **params):
         """not used in countBasedPriority"""
