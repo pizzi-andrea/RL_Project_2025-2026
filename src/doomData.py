@@ -12,6 +12,7 @@ from episode import Episode, Transition
 from priority_functions import PriorityExperienceReplay
 
 class DoomDataset (Dataset):
+    """Simple dataset implementation for VAE pre-training"""
     def __init__(self, base_path, resize=(64,64)):
         super().__init__()
         self.paths = []
@@ -34,6 +35,7 @@ class DoomDataset (Dataset):
 
 
 class EpisodicDoomDataset(Dataset):
+    """Dataset class for Episodic VizDoom dataset based on PER buffer"""
     def __init__(self, base_path:Path, max_length:int, priority_buffer:PriorityExperienceReplay, preprocessor:Compose=None):
         super().__init__()
 
@@ -97,15 +99,6 @@ class EpisodicDoomDataset(Dataset):
             "user_att":[],
             "priority_idx": p_idx[0]
         }
-        """
-        self.idx = idx
-        self.idx_n = idx_n
-        self.o_t = o_t
-        self.action = a
-        self.reward = r 
-        self.player_state = player_state
-        self.done = d
-        """
         
         for transition in episode[0]:
             
