@@ -212,3 +212,6 @@ __marimo__/
 _vizdoom/
 VAE_logs/
 _vizdoom.ini
+src/Doom4VAE
+src/Doom4RSSM
+src/.vscode
