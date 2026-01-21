@@ -3,7 +3,7 @@ from sumTree import SumTree
 from abc import ABC, abstractmethod
 from typing import Any
 
-from transition import Transition
+from episode import Transition
 
 class PriorityExperienceReplay(ABC):
 
@@ -114,29 +114,6 @@ class CuriosityReplayPriority(PriorityExperienceReplay):
         pass 
     def info(self):
         pass      
-
-
-if __name__ == "__main__":
-    replay = CountBasedPriority(SumTree(10), 0.5)
-    
-    replay.store(Transition(state=np.array([0,1]), action=1, reward=1.0, next_state=np.array([1,0])))
-    replay.store(Transition(state=np.array([0,1]), action=1, reward=1.0, next_state=np.array([1,0])))
-    replay.store(Transition(state=np.array([0,1]), action=1, reward=1.0, next_state=np.array([1,0])))
-    replay.store(Transition(state=np.array([0,1]), action=1, reward=1.0, next_state=np.array([1,0])))
-    replay.store(Transition(state=np.array([0,1]), action=1, reward=1.0, next_state=np.array([1,0])))
-
-    replay.store(Transition(state=np.array([0,1]), action=1, reward=1.0, next_state=np.array([1,0])))
-    replay.store(Transition(state=np.array([0,1]), action=1, reward=1.0, next_state=np.array([1,0])))
-    replay.store(Transition(state=np.array([0,1]), action=1, reward=1.0, next_state=np.array([1,0])))
-    replay.store(Transition(state=np.array([0,1]), action=1, reward=1.0, next_state=np.array([1,0])))
-    replay.store(Transition(state=np.array([0,1]), action=1, reward=1.0, next_state=np.array([1,0])))
-    
-    print(replay.counter)
-
-    replay.get(5)
-    replay.get(5)
-    replay.get(5)
-    replay.info()
 
     
 
