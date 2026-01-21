@@ -1,12 +1,12 @@
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
-from priority_functions import CuriosityReplayPriority
-from doom_dataset import DoomDataset
+from priority_functions import CuriosityReplayPriority, CountBasedPriority, AdversarialReplayPriority
+from doomData import DoomDataset, EpisodicDoomDataset
 from network.encoder.VAE import VAE
 from lightning.pytorch.loggers import TensorBoardLogger
 from lightning import Trainer as LTrainer
-from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger
+from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
 

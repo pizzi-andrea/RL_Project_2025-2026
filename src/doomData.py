@@ -1,13 +1,14 @@
 import os
-import random
 import numpy as np
 import torch
 import pandas as pd
+
+from torch.nn.utils.rnn import pad_sequence
 from PIL import Image
 from pathlib import Path
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms.v2 import Compose, Resize, ToImage, ToDtype
-
+from tqdm import tqdm
 from episode import Episode, Transition
 from priority_functions import PriorityExperienceReplay
 
@@ -56,7 +57,7 @@ class EpisodicDoomDataset(Dataset):
                 ]
             )
         
-        for episode in episods:
+        for episode in tqdm(episods, desc="load dataset"):
         
             obs_path = episode.joinpath("obs")
             t_path = episode.joinpath("transitions.csv")
@@ -86,44 +87,71 @@ class EpisodicDoomDataset(Dataset):
         return len(self.buff)
     
     def __getitem__(self, index):
+        episode, p_idx, _ = self.buff.get(1)
 
-    
-        episode, p_idx, _  = self.buff.get(1)
-        t = {
-            "obs_idx":[],
-            "obs": [],
-            "action": [],
-            "reward":[],
-            "next_obs":[],
-            "done": [],
-            "user_att":[],
-            "priority_idx": p_idx[0]
+        obs = []
+        action = []
+        reward = []
+        done = []
+        user_att = []
+
+        for transition in episode[0]:
+            obs.append(self.preprocess(Image.open(transition.o_t).convert("RGB")))
+            action.append(transition.action)
+            reward.append(transition.reward)
+            done.append(transition.done)
+            user_att.append(transition.player_state)
+
+        return {
+            "obs": torch.stack(obs),              # [T, C, H, W]
+            "action": torch.stack(action),        # [T]
+            "reward": torch.stack(reward),        # [T]
+            "done": torch.stack(done),            # [T]
+            "user_att": torch.stack(user_att),    # [T, A]
+            "priority_idx": torch.tensor(p_idx),
         }
         
-        for transition in episode[0]:
-            
-            t["obs"].append(self.preprocess(Image.open(transition.o_t).convert("RGB")))
-            t["action"].append(transition.action)
-            t["done"].append(transition.done)
-            t["reward"].append(transition.reward)
-            t["user_att"].append(transition.player_state)
-            t["obs_idx"].append(transition.idx)
-            t["next_obs"].append(transition.idx_n)
 
-        return t
-        
-            
+def collate_episodic_fn(batch):
 
+    obs = pad_sequence([b["obs"] for b in batch], batch_first=True)        # [B, max_T, C, H, W]
+    action = pad_sequence([b["action"] for b in batch], batch_first=True)  # [B, max_T]
+    reward = pad_sequence([b["reward"] for b in batch], batch_first=True)
+    done = pad_sequence([b["done"] for b in batch], batch_first=True)
+    user_att = pad_sequence([b["user_att"] for b in batch], batch_first=True)
+
+    mask = pad_sequence([torch.ones(len(b["obs"])) for b in batch], batch_first=True)
+
+    priority_idx = torch.cat([b["priority_idx"] for b in batch], dim=0)
+
+    return {
+        "obs": obs,
+        "action": action,
+        "reward": reward,
+        "done": done,
+        "user_att": user_att,
+        "mask": mask,
+        "priority_idx": priority_idx
+    }
 
 
 if __name__ == "__main__":
     dataset_base = "Doom4RSSM/train"
     from priority_functions import CountBasedPriority
-    from sumTree import SumTree
-    from tqdm.auto import tqdm
     buff = CountBasedPriority(500, 0.1)
     d = EpisodicDoomDataset(dataset_base, 30, buff)
     print(len(d))
+
+    loader = DataLoader(d, batch_size=8, collate_fn=collate_episodic_fn)
+
+    idx = 0
+    for b in loader:
+        idx +=1
+        print(b["obs"].shape)
+        print(b["mask"])
+        if idx > 10:
+            break
+
     
         
 
