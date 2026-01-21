@@ -15,7 +15,7 @@ episodes=(8 24 40 8 8 40 8)
 dataset_name="Doom4VAE"
 
 for idx in "${!episodes[@]}"; do
-  python doomGen.py \
+  python src/doomGen.py \
     -d "$dataset_name" \
     -n "${episodes[$idx]}" \
     -s train \

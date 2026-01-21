@@ -9,7 +9,7 @@ episodes=(500)
 dataset_name="Doom4RSSM"
 
 for idx in "${!episodes[@]}"; do
-  python doomGen.py \
+  python src/doomGen.py \
     -d "$dataset_name" \
     -n "${episodes[$idx]}" \
     -s train \
