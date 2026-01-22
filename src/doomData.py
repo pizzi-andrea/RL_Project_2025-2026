@@ -42,7 +42,7 @@ class EpisodicDoomDataset(Dataset):
 
         self.buff = priority_buffer
         self.base_path = Path(base_path)
-        max_length = max_length
+        self.max_length = max_length
         
         episods = [p for p in self.base_path.iterdir()]
         fix_columns = ["ids","action","reward","done","next_ids"]
@@ -103,7 +103,7 @@ class EpisodicDoomDataset(Dataset):
             user_att.append(transition.player_state)
 
         return {
-            "obs": torch.stack(obs),              # [T, C, H, W]
+            "obs": torch.stack(obs),              # [ [T1, C, H, W], [T2, C, H, W] ] /-> [B,T,C,H,W]
             "action": torch.stack(action),        # [T]
             "reward": torch.stack(reward),        # [T]
             "done": torch.stack(done),            # [T]
@@ -113,7 +113,7 @@ class EpisodicDoomDataset(Dataset):
         
 
 def collate_episodic_fn(batch):
-
+    """Collate function for dataloader pytorch"""
     obs = pad_sequence([b["obs"] for b in batch], batch_first=True)        # [B, max_T, C, H, W]
     action = pad_sequence([b["action"] for b in batch], batch_first=True)  # [B, max_T]
     reward = pad_sequence([b["reward"] for b in batch], batch_first=True)
@@ -137,18 +137,20 @@ def collate_episodic_fn(batch):
 
 if __name__ == "__main__":
     dataset_base = "Doom4RSSM/train"
-    from priority_functions import CountBasedPriority
-    buff = CountBasedPriority(500, 0.1)
+    from priority_functions import CountBasedPriority, AdversarialReplayPriority
+    buff = AdversarialReplayPriority(500)
     d = EpisodicDoomDataset(dataset_base, 30, buff)
-    print(len(d))
 
-    loader = DataLoader(d, batch_size=8, collate_fn=collate_episodic_fn)
+    loader = DataLoader(d, batch_size=16, collate_fn=collate_episodic_fn)
 
     idx = 0
     for b in loader:
+        
         idx +=1
-        print(b["obs"].shape)
-        print(b["mask"])
+        buff.info()
+
+        p = b["priority_idx"].numpy()
+        buff.update(priority_idx=p, losses=np.random.rand(len(p)))
         if idx > 10:
             break
 

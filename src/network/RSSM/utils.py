@@ -18,9 +18,3 @@ def st_onehot_from_logits(logits: torch.Tensor) -> torch.Tensor:
     # straight-through: forward discrete, backward continuous
     return y_hard + (probs - probs.detach()) # this is equal to y_hard in forward, but gradients are from probs in the backward pass
 
-def cat_kl_logits(q_logits: torch.Tensor, p_logits: torch.Tensor) -> torch.Tensor:
-    # KL(q || p) for categorical, computed from logits
-    q_logprob = F.log_softmax(q_logits, dim=-1) #posterior
-    p_logprob = F.log_softmax(p_logits, dim=-1) #prior
-    q_prob = torch.softmax(q_logits, dim=-1)
-    return (q_prob * (q_logprob - p_logprob)).sum(dim=-1) #discrete KL

@@ -122,8 +122,7 @@ class VAE(L.LightningModule):
     def configure_optimizers(self):
         return Adam(self.parameters(), lr=0.001)
 
-    
-    def forward(self, x):
+    def encode(self, x):
         encode_img = self.encoder(x)
         mean_var = encode_img.view(encode_img.size(0), -1)
 
@@ -137,11 +136,24 @@ class VAE(L.LightningModule):
             z = mean + std * eps
         else:
             z = mean
-
         
+        return z, mean, var
+
+    
+    def decode(self, z, reshape_size:tuple):
         z_j = self.z_project(z)
-        z_j = z_j.view(-1, 256, 15, 20)
-        return self.decoder(z_j), mean, var  # no need for extra sigmoid, already in decoder
+        z_j = z_j.view(shape=reshape_size)
+        x = self.decoder(z_j)
+        return x
+
+    def forward(self, x):
+        z, mean , var = self.encoder(x)
+
+        if self.train: # in train decode z to evaluate the decoder
+            x_hat = self.decode(z,reshape_size=(-1, 256, 15, 20))
+            return x_hat, mean, var
+
+        return z, mean, var   # work in latent space when not in train     
         
 
 
