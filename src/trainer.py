@@ -62,7 +62,7 @@ class DreamerXP_Trainer(Trainer):
         dataset_validation =  EpisodicDoomDataset(path_dataset_validation, max_length=train_args["episode_length"], priority_buffer=train_args["priority_buffer_validation"], preprocessor=train_args["preprocessor"])
         
         buff_train = train_args["priority_buffer_train"]
-        buff_train = train_args["priority_buffer_validation"]
+        buff_validation = train_args["priority_buffer_validation"]
         
         loader_train = DataLoader(dataset_train, batch_size=batch_size, shuffle=True, num_workers=os.cpu_count()-1, collate_fn=collate_episodic_fn)
         loader_validation = DataLoader(dataset_validation, batch_size=batch_size, shuffle=True, num_workers=os.cpu_count()-1, collate_fn=collate_episodic_fn)

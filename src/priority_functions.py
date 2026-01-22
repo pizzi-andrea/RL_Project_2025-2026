@@ -108,8 +108,9 @@ class AdversarialReplayPriority(PriorityExperienceReplay):
         # Initialize parameters
         self.alpha = float(alpha)
         self.eps = float(eps)
-        # Initialize PMAX
-        self.PMAX = float(p_max)
+        # Initialize PMAX starting from a small value 
+        self.PMAX = 1.0
+        self.p_max = float(p_max) # upper bound for PMAX
         # trick: use running min to shift losses (usefull to stabilize the loss)
         self.use_running_min = use_running_min
         self.running_min = np.inf
@@ -128,7 +129,7 @@ class AdversarialReplayPriority(PriorityExperienceReplay):
         batch = np.ndarray(shape=(b), dtype=np.object_) 
         priority_idx = np.ndarray(shape=(b), dtype=np.int32)
         buffer_idx = np.ndarray(shape=(b), dtype=np.int32)
-        #we divide P into b segments
+        #we divide P into b segments (so i'm sure to cover all the range with the random samples)
         s = P / b
         for i in range(b):
             low = s * i
@@ -164,8 +165,9 @@ class AdversarialReplayPriority(PriorityExperienceReplay):
             losses = losses - self.running_min
         # compute p = (|L| + eps)^alpha
         new_p = (np.abs(losses) + self.eps) ** self.alpha
-        # avoid 0 priority
-        new_p = np.maximum(new_p, 1e-8)
+        # clip priority
+        new_p = np.clip(new_p, 1e-8, self.p_max)
+
         # update priorities in the sum-tree
         for p_idx, p in zip(priority_idx, new_p):
             self.buffer.update_priority(int(p_idx), float(p))
