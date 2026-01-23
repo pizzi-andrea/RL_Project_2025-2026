@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -47,7 +47,7 @@ class RSSM(nn.Module): # need specific train loop
         self.action_embed = nn.Sequential(nn.Linear(action_dim, embed_dim), nn.SiLU())
         self.z_embed = nn.Sequential(nn.Linear(self.L * self.K, embed_dim), nn.SiLU()) #so that action and z have same dimension that is not too smal
 
-        self.gru = nn.GRUCell(input_size=2 * embed_dim, hidden_size=deter_dim) #input: [B,input_size], prev_h: [B,deter_dim] -> out: [B,deter_dim]
+        self.gru = nn.GRU(input_size=2 * embed_dim, hidden_size=deter_dim, batch_first=True) #Batch, seq, feature
         self.loss_buffer = None
         # prior logits from h
         self.prior_net = nn.Sequential( # self.prior_net(h) -> logits of z
@@ -80,38 +80,69 @@ class RSSM(nn.Module): # need specific train loop
         z_st = st_onehot_from_logits(logits)  # [B,L,K] z discrete but derivable
         z_flat = z_st.view(-1, self.L * self.K)
         return z_flat, logits
-
-    def imagine_step(self, prev: RSSMState, action: torch.Tensor) -> RSSMState:
-        # action: [B,A] one-hot or continuous vector
+    
+    def _gru_step(self, prev_h: torch.Tensor, inp_bt: torch.Tensor) -> torch.Tensor:
+        # prev_h: [B,H]
+        # inp_bt: [B, 2*embed_dim]
+        x = inp_bt.unsqueeze(1)  # [B,1,2*embed_dim] for GRU
+        h0 = prev_h.unsqueeze(0)  # [1,B,H] for GRU
+        _, h_last = self.gru(x, h0)  # h_last: [1,B,H]
+        return h_last.squeeze(0)  # [B,H]
+    
+    def imagine_step(self, prev: RSSMState, action: torch.Tensor, mask_t: Optional[torch.Tensor]= None) -> RSSMState: # [B] 1=valid 0=pad
         aemb = self.action_embed(action)
         zemb = self.z_embed(prev.z)
         inp = torch.cat([aemb, zemb], dim=-1)
-        h = self.gru(inp, prev.h)
 
-        prior_logits = self.prior_net(h)
-        z, prior_logits = self._logits_to_st_z(prior_logits)
-        return RSSMState(h=h, z=z, z_logits=prior_logits)
+        h_new = self._gru_step(prev.h, inp)
 
-    def observe_step(self, prev: RSSMState, action: torch.Tensor, enc_x: torch.Tensor) -> Tuple[RSSMState, torch.Tensor]: #it's like imagine step but with posterior (enc_x is the encoded observation)
-        # First update h with action and prev z, then compute posterior using enc_x
+        prior_logits = self.prior_net(h_new)
+        z_new, prior_logits = self._logits_to_st_z(prior_logits)
+
+        if mask_t is not None:
+            m = mask_t.float().unsqueeze(-1)  # [B,1]
+            h = m * h_new + (1 - m) * prev.h
+            z = m * z_new + (1 - m) * prev.z
+            m3 = mask_t.float().view(-1, 1, 1)
+            z_logits = m3 * prior_logits + (1 - m3) * prev.z_logits
+            return RSSMState(h=h, z=z, z_logits=z_logits)
+
+        return RSSMState(h=h_new, z=z_new, z_logits=prior_logits)
+
+    def observe_step(
+        self,
+        prev: RSSMState,
+        action: torch.Tensor,
+        enc_x: torch.Tensor,
+        mask_t: Optional[torch.Tensor] = None,
+    ) -> Tuple[RSSMState, torch.Tensor]:
         aemb = self.action_embed(action)
         zemb = self.z_embed(prev.z)
         inp = torch.cat([aemb, zemb], dim=-1)
-        h = self.gru(inp, prev.h)
 
-        prior_logits = self.prior_net(h).view(-1, self.L, self.K)
+        h_new = self._gru_step(prev.h, inp)
 
-        post_in = torch.cat([h, enc_x], dim=-1)
+        prior_logits = self.prior_net(h_new).view(-1, self.L, self.K)
+
+        post_in = torch.cat([h_new, enc_x], dim=-1)
         post_logits = self.post_net(post_in).view(-1, self.L, self.K)
 
-        # sample z from posterior (straight-through)
         post_probs = unimix_probs(torch.softmax(post_logits, dim=-1), unimix=self.unimix)
         post_logits = torch.log(post_probs.clamp_min(1e-8))
         z_st = st_onehot_from_logits(post_logits)
-        z_flat = z_st.view(-1, self.L * self.K)
+        z_new = z_st.view(-1, self.L * self.K)
 
-        state = RSSMState(h=h, z=z_flat, z_logits=post_logits)
-        # return prior_logits for KLs (that is needed for the training loss and needs prior and posterior)
+        if mask_t is not None:
+            m = mask_t.float().unsqueeze(-1)
+            h = m * h_new + (1 - m) * prev.h
+            z = m * z_new + (1 - m) * prev.z
+            m3 = mask_t.float().view(-1, 1, 1)
+            z_logits = m3 * post_logits + (1 - m3) * prev.z_logits
+            state = RSSMState(h=h, z=z, z_logits=z_logits)
+            # anche prior_logits potresti “fermarlo” se vuoi coerenza:
+            return state, prior_logits
+
+        state = RSSMState(h=h_new, z=z_new, z_logits=post_logits)
         return state, prior_logits 
 
 
