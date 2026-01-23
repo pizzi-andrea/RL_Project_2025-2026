@@ -25,7 +25,17 @@ class VAEAdapter(nn.Module):
         super().__init__()
         self.vae = vae
     
+
+class PERAdapter(L.Callback):
+    def __init__(self, buffer):
+        super().__init__()
+        self.buffer = buffer
     
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        index = outputs["episods_idx"]
+        loss = outputs["episods_loss"]
+
+        self.buffer.update(priority_idx=index, losses=loss)
 
 class VAEEncoderAdapter(VAEAdapter):
     """
@@ -89,7 +99,9 @@ class VAEDecoderAdapter(VAEAdapter):
 class Dreamer(L.LightningModule):
     def __init__(
         self,
+        buffer_PER,
         action_dim: int,
+        att_dim:int,
         image_channels: int = 3,
         deter_dim: int = 1024,
         stoch_latents: int = 32,
@@ -100,6 +112,7 @@ class Dreamer(L.LightningModule):
         beta_dyn: float = 1.0,
         beta_rep: float = 0.1,
         free_nats: float = 1.0,
+        
         unimix: float = 0.01,
         # --- nuove opzioni VAE ---
         
@@ -113,7 +126,7 @@ class Dreamer(L.LightningModule):
 
         # RSSM (embed_dim deve matchare la dimensione di enc_x)
         # Se usi VAE, il modo più semplice è enc_dim == vae_latent_dim
-        rssm_embed_dim = enc_dim
+        rssm_embed_dim = enc_dim + att_dim
 
         self.rssm = RSSM(
             action_dim=action_dim,
@@ -161,14 +174,36 @@ class Dreamer(L.LightningModule):
             nn.Linear(deter_dim, 1),
         )
 
+        # encoders
+
+        self.att_encoder = nn.Sequential(
+            nn.Linear(att_dim, out_features=att_dim),
+            nn.LayerNorm(att_dim*2),
+            nn.SiLU()
+        )
+
+        
+        self.episods_idx = []
+        self.loss_episods = [] 
+
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
 
-    def forward(self, obs: torch.Tensor, actions: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(self, obs: torch.Tensor, actions: torch.Tensor, att_user:torch.Tensor, mask:torch.Tensor|None=None) -> Dict[str, torch.Tensor]:
         B, T, C, H, W = obs.shape
 
         # enc: [B,T,enc_dim]
         enc = self.encoder(obs)
+        att_user = self.att_encoder(att_user)
+
+
+        # -- fuse obs with user att
+
+        # cat fusion
+        enc = torch.cat([enc, att_user], dim=-1)
+        #
+
+        
 
         state = self.rssm.init_state(B, device=obs.device)
 
@@ -202,44 +237,63 @@ class Dreamer(L.LightningModule):
             "prior_logits": prior_logits,
         }
 
+    def get_loss_for_batch(self):
+        """get loss for batch and index episods in batch"""
+        idx_episods = torch.cat(self.episods_idx).numpy(True)
+        loss_episods = torch.cat(self.loss_episods).numpy(True)
+        self.episods_idx.clear()
+        self.loss_episods.clear()
+        return {
+            "episods_idx":idx_episods, 
+            "episods_loss":loss_episods
+        }
+    
     def training_step(self, batch, batch_idx):
         obs = batch["obs"]
-        actions = batch["actions"]
-        rewards = batch["rewards"]
-        cont = batch["cont"]
+        actions = batch["action"]
+        rewards = batch["reward"]
+        cont = batch["done"]
+        
+        idx_episode = batch["priority_idx"]
+        user_att = batch["user_att"]
+        mask = batch["mask"]
 
-        out = self.forward(obs, actions)
+        out = self.forward(obs, actions, user_att, mask)
 
         # Ricostruzione immagini
         recon = F.binary_cross_entropy(out["x_hat"], obs, reduction="none").mean(dim=(2,3,4))  # [B,T]
         reward_loss = F.mse_loss(out["r_hat"], rewards, reduction="none")                      # [B,T]
         cont_loss = F.binary_cross_entropy_with_logits(out["c_logits"], cont, reduction="none")# [B,T]
-        L_pred = (recon + reward_loss + cont_loss).mean()
+        
+        # --- 1. Calcolo componenti Predizione [B, T] ---
+        
+        L_pred_BT = recon + reward_loss + cont_loss 
 
+        # --- 2. KL components ---
         q_logits = out["post_logits"]
         p_logits = out["prior_logits"]
 
-        kl_dyn = cat_kl_logits(q_logits.detach(), p_logits).sum(dim=-1)  # [B,T]
-        kl_rep = cat_kl_logits(q_logits, p_logits.detach()).sum(dim=-1)  # [B,T]
+        
+        kl_dyn_BT = cat_kl_logits(q_logits.detach(), p_logits).sum(dim=-1)
+        kl_rep_BT = cat_kl_logits(q_logits, p_logits.detach()).sum(dim=-1)
 
+        # clamping 
         free = self.hparams.free_nats
-        kl_dyn = torch.clamp(kl_dyn, min=free).mean()
-        kl_rep = torch.clamp(kl_rep, min=free).mean()
+        kl_dyn_BT = torch.clamp(kl_dyn_BT, min=free)
+        kl_rep_BT = torch.clamp(kl_rep_BT, min=free)
 
-        loss = (
-            self.hparams.beta_pred * L_pred +
-            self.hparams.beta_dyn * kl_dyn +
-            self.hparams.beta_rep * kl_rep
+        # --- 3. total loss
+        total_loss_BT = (
+            self.hparams.beta_pred * L_pred_BT +
+            self.hparams.beta_dyn * kl_dyn_BT +
+            self.hparams.beta_rep * kl_rep_BT
         )
 
-        self.log_dict({
-            "wm/loss": loss,
-            "wm/pred": L_pred,
-            "wm/kl_dyn": kl_dyn,
-            "wm/kl_rep": kl_rep,
-            "wm/recon": recon.mean(),
-            "wm/r_loss": reward_loss.mean(),
-            "wm/c_loss": cont_loss.mean(),
-        }, prog_bar=True)
+        # --- 4. results ---
 
-        return loss
+        loss_per_batch = total_loss_BT.mean(dim=1) 
+        self.episods_idx.append(idx_episode)
+        self.loss_episods.append(loss_per_batch)
+
+        r =  {"loss":loss_per_batch.mean()} | self.get_loss_for_batch()
+        return r
