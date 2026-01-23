@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import pandas as pd
 
+from torch.nn.functional import one_hot
 from torch.nn.utils.rnn import pad_sequence
 from PIL import Image
 from pathlib import Path
@@ -65,6 +66,8 @@ class EpisodicDoomDataset(Dataset):
             episode = []
             t = pd.read_csv(t_path)
             user_att = [att for att in t.columns if att not in fix_columns]
+
+            self.num_actions = len(t['action'].unique())
             
             for _, row in t.iterrows():
                 ids = torch.tensor(row['ids'])
@@ -97,14 +100,16 @@ class EpisodicDoomDataset(Dataset):
 
         for transition in episode[0]:
             obs.append(self.preprocess(Image.open(transition.o_t).convert("RGB")))
-            action.append(transition.action)
+            action.append(one_hot(transition.action, num_classes=self.num_actions).unsqueeze(0))
             reward.append(transition.reward)
             done.append(transition.done)
             user_att.append(transition.player_state)
 
+        action = torch.cat(action, dim=0)
+
         return {
             "obs": torch.stack(obs),              # [ [T1, C, H, W], [T2, C, H, W] ] /-> [B,T,C,H,W]
-            "action": torch.stack(action),        # [T]
+            "action": action,        # [T]
             "reward": torch.stack(reward),        # [T]
             "done": torch.stack(done),            # [T]
             "user_att": torch.stack(user_att),    # [T, A]
@@ -148,7 +153,7 @@ if __name__ == "__main__":
         
         idx +=1
         buff.info()
-
+        print(b["action"].shape)
         p = b["priority_idx"].numpy()
         buff.update(priority_idx=p, losses=np.random.rand(len(p)))
         if idx > 10:
