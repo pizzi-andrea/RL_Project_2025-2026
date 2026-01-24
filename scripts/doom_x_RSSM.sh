@@ -4,7 +4,7 @@ doom_scenarios=(
   "VizdoomDefendLine-v0"
 )
 
-episodes=(500)
+episodes=(10)
 
 dataset_name="Doom4RSSM"
 
@@ -13,6 +13,9 @@ for idx in "${!episodes[@]}"; do
     -d "$dataset_name" \
     -n "${episodes[$idx]}" \
     -s train \
+    --reload \
     -e "${doom_scenarios[$idx]}" \
-    --episodic True
+    --episodic \
+    -m
+    
 done

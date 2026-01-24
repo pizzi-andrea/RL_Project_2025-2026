@@ -27,15 +27,16 @@ class VAEAdapter(nn.Module):
     
 
 class PERAdapter(L.Callback):
-    def __init__(self, buffer):
+    def __init__(self, buffer_train):
         super().__init__()
-        self.buffer = buffer
+        self.buffer_train = buffer_train
     
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         index = outputs["episods_idx"]
         loss = outputs["episods_loss"]
 
-        self.buffer.update(priority_idx=index, losses=loss)
+        self.buffer_train.update(priority_idx=index, losses=loss)
+        
 
 class VAEEncoderAdapter(VAEAdapter):
     """
@@ -99,9 +100,8 @@ class VAEDecoderAdapter(VAEAdapter):
 class Dreamer(L.LightningModule):
     def __init__(
         self,
-        buffer_PER,
-        action_dim: int,
-        att_dim:int,
+        action_dim: int=16,
+        att_dim:int=6,
         image_channels: int = 3,
         deter_dim: int = 1024,
         stoch_latents: int = 32,
@@ -114,8 +114,7 @@ class Dreamer(L.LightningModule):
         free_nats: float = 1.0,
         
         unimix: float = 0.01,
-        # --- nuove opzioni VAE ---
-        
+        # --- nuove opzioni VAE --- 
         vae_ckpt_path: Optional[str] = None,
         vae_latent_dim: int = 128,
         freeze_vae: bool = True,
@@ -237,6 +236,9 @@ class Dreamer(L.LightningModule):
             "prior_logits": prior_logits,
         }
 
+    def validation_step(self, *args, **kwargs):
+        return super().validation_step(*args, **kwargs)
+
     def get_loss_for_batch(self):
         """get loss for batch and index episods in batch"""
         idx_episods = torch.cat(self.episods_idx).numpy(True)
@@ -247,6 +249,61 @@ class Dreamer(L.LightningModule):
             "episods_idx":idx_episods, 
             "episods_loss":loss_episods
         }
+    
+
+    def validation_step(self, batch, batch_idx):
+        # Estrazione dati (identica al training)
+        obs = batch["obs"]
+        actions = batch["action"]
+        rewards = batch["reward"]
+        cont = batch["done"]
+        
+        user_att = batch["user_att"]
+        mask = batch["mask"]
+
+        # Forward pass (assicurati che il modello sia in eval() mode per dropout/batchnorm)
+        # In DreamerV3, il forward calcola la scomposizione dello stato latente
+        out = self.forward(obs, actions, user_att, mask)
+
+        # 1. Calcolo Loss di Ricostruzione e Predizione (Senza gradienti)
+        # Usiamo 'none' per mantenere il controllo sulle dimensioni prima della media
+        recon = F.binary_cross_entropy(out["x_hat"], obs, reduction="none").mean(dim=(2,3,4))
+        reward_loss = F.mse_loss(out["r_hat"], rewards, reduction="none")
+        cont_loss = F.binary_cross_entropy_with_logits(out["c_logits"], cont, reduction="none")
+        
+        L_pred_BT = recon + reward_loss + cont_loss 
+
+        # 2. Calcolo KL Divergence
+        # In validazione la KL ci dice quanto il "prior" (predizione) si allontana dal "posterior" (realtà)
+        q_logits = out["post_logits"]
+        p_logits = out["prior_logits"]
+        kl_val_BT = cat_kl_logits(q_logits, p_logits).sum(dim=-1)
+
+        # 3. Calcolo Loss Totale (per logging)
+        total_loss_BT = (
+            self.hparams.beta_pred * L_pred_BT +
+            self.hparams.beta_dyn * kl_val_BT # In val usiamo spesso la KL pura senza bilanciamento dyn/rep
+        )
+
+        # 4. Metriche Extra per Validazione
+        # È utile monitorare l'accuratezza della predizione della reward (MAE)
+        reward_mae = torch.abs(out["r_hat"] - rewards).mean()
+
+        # Logghiamo i risultati per TensorBoard/WandB
+        val_log = {
+            "val_loss": total_loss_BT.mean(),
+            "val_recon_loss": recon.mean(),
+            "val_reward_loss": reward_loss.mean(),
+            "val_reward_mae": reward_mae,
+            "val_kl": kl_val_BT.mean()
+        }
+        
+        self.log_dict(val_log, on_step=False, on_epoch=True, prog_bar=True)
+        
+
+        # Nota: non aggiorniamo self.loss_episods qui per non sporcare 
+        # le statistiche di training con i dati di validazione.
+        return val_log
     
     def training_step(self, batch, batch_idx):
         obs = batch["obs"]

@@ -5,11 +5,16 @@ from priority_functions import CuriosityReplayPriority, CountBasedPriority, Adve
 from doomData import DoomDataset, EpisodicDoomDataset, collate_episodic_fn
 from network.encoder.VAE import VAE
 from network.RSSM.rssm import RSSM
-from network.controller import Controller
+from network.world.Dreamer import Dreamer, PERAdapter
+from network.controller.Policy import Policy
 from lightning.pytorch.loggers import TensorBoardLogger
 from lightning import Trainer as LTrainer
 from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
+
+import gymnasium
+from vizdoom import gymnasium_wrapper
+
 
 
 class Trainer(ABC):
@@ -50,13 +55,12 @@ class DreamerXP_Trainer(Trainer):
         super().__init__(log_directory)
         
         self.logger = TensorBoardLogger(log_directory, name=False)
-        self.vae = VAE(latent_dim=model_params["latent_dim"])
-        self.vae.load_state_dict()
-        self.rssm = RSSM()
-        self.controller = Controller()
+        self.env = None
+        self.dynamic = Dreamer(vae_ckpt_path="VAE_ckpts/epoch=249-step=31500.ckpt")
+        self.controller = Policy()
         
     
-    def fit(self, path_dataset_train:str, path_dataset_validation:str, batch_size:int, epochs:int, **train_args):
+    def fit(self, path_dataset_train:str, env_id:str, path_dataset_validation:str, batch_size:int, epochs:int, **train_args):
 
         dataset_train = EpisodicDoomDataset(path_dataset_train, max_length=train_args["episode_length"], priority_buffer=train_args["priority_buffer_train"], preprocessor=train_args["preprocessor"])
         dataset_validation =  EpisodicDoomDataset(path_dataset_validation, max_length=train_args["episode_length"], priority_buffer=train_args["priority_buffer_validation"], preprocessor=train_args["preprocessor"])
@@ -72,11 +76,15 @@ class DreamerXP_Trainer(Trainer):
         train = train_args["train_epochs"]
         validation = train_args["validation_epochs"]
         random_time = train_args["random_time"]
+        adapter = PERAdapter(buff_train)
+        trainer = LTrainer(callbacks=[adapter], max_epochs=train)
 
         for iter in range(1, epochs +1):
-            self.rssm.fit()
-
             
+
+           
+            trainer.fit(self.dynamic, loader_train, loader_validation,ckpt_path=self.log_directory)
+
             for iter_val in range(1,validation+1):
                 if epoch_idx > random_time:
                     pass # push new trajectory in train  + train vae

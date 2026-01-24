@@ -30,7 +30,7 @@ class RSSM(nn.Module): # need specific train loop
     """
     def __init__( #x_t has shape [B,L,K]
         self,
-        action_dim: int,
+        action_dim: int=16,
         deter_dim: int = 1024, # deterministic hidden state dimension
         stoch_latents: int = 32,   # L (number of discrete latent variables)
         stoch_classes: int = 32,   # K (number of classes per latent variable)

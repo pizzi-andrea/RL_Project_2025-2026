@@ -6,7 +6,7 @@ from tqdm.auto import tqdm
 from PIL import Image
 from pathlib import Path
 from random_policy import Random_Policy
-
+from env_info import ATT_PLAYER, GamePad
 import gymnasium
 from vizdoom import gymnasium_wrapper
 if __name__ == "__main__":
@@ -15,22 +15,22 @@ if __name__ == "__main__":
     parser.add_argument('-n', '--episods', required=True, default=10, type=int)
     parser.add_argument('-s', '--split', required=True, choices=["train", "test", "validation"])
     parser.add_argument('-e', '--env', required=False, default="VizdoomBasic-v0", type=str)
-    parser.add_argument('--episodic', required=False, default=False, type=bool)
-    parser.add_argument("-r", "--reload", required=False, default=False, type=bool)
-    parser.add_argument("-m", "--metadata", required=False, default=True)
+    
+    parser.add_argument('--episodic', required=False, action='store_true')
+    parser.add_argument("-r", "--reload", required=False, action='store_true' )
+    parser.add_argument("-m", "--metadata", required=False, action='store_true')
     
     
     args = parser.parse_args()
     env = gymnasium.make(
     args.env,
     render_mode="rgb_array",
-    max_buttons_pressed=1,
-    frame_skip=10
+    frame_skip=10,
+    max_buttons_pressed=0
     
     )
-    
-    args.metadata = args.metadata and not args.reload
 
+    gamepad = GamePad()
     agent = Random_Policy(env.action_space, 1)
     base_path = Path(args.dataset).joinpath(args.split)
     ids = 0
@@ -38,7 +38,7 @@ if __name__ == "__main__":
     if args.reload and base_path.exists():
         if args.episodic:
             init_episode = len(list(base_path.iterdir()))
-            args.episods += init_episode 
+            #args.episods += init_episode 
         else:    
             ids = sum(1 for _ in base_path.rglob("obs/*.png"))
     else:
@@ -53,14 +53,16 @@ if __name__ == "__main__":
     for s in stat_name:
         _player[s] = None
     
-    for episode in tqdm(range(init_episode, args.episods)):
+    for episode in tqdm(range(init_episode, init_episode + args.episods)):
         
         
+        gamepad.reset()
         game, _ = env.reset()
         s = game["screen"]
         game_info = game["gamevariables"] 
         done = False
         reward = 0
+        
         if args.episodic:
             work_path = base_path.joinpath(f"{episode}")
             os.makedirs(work_path.joinpath("obs"))
@@ -79,6 +81,13 @@ if __name__ == "__main__":
             # ---------- action ----------
             action = agent.act(s)
 
+            
+            #print(f"action:{action}")
+            for button, stato in enumerate(action):
+                gamepad[button] = stato
+
+
+
             # ---------- step ----------
             game_next, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
@@ -89,23 +98,27 @@ if __name__ == "__main__":
             # ---------- store transition ----------
             transition = {
                 "ids": ids,
-                "action": action,
                 "reward": reward,
                 "done": done,
                 "next_ids": ids + 1,
             }
 
-            buffer.append(transition | _player)
+            att_diff = ATT_PLAYER.keys() - _player.keys()
+
+            dict_diff = {k: 0 for k in att_diff}
+
+            buffer.append(transition | _player | gamepad.to_dict() | dict_diff)
 
             # ---------- avanza ----------
             s = s_next
             game_info = game_info_next
             ids += 1
+            gamepad.reset()
 
 
             
         
-        if args.metadata and args.episodic:
+        if args.metadata:
             pandas.DataFrame(buffer).to_csv(work_path.joinpath("transitions.csv"), index=False)
             buffer = []
             ids = 0

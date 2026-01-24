@@ -66,12 +66,10 @@ class EpisodicDoomDataset(Dataset):
             episode = []
             t = pd.read_csv(t_path)
             user_att = [att for att in t.columns if att not in fix_columns]
-
-            self.num_actions = len(t['action'].unique())
             
             for _, row in t.iterrows():
                 ids = torch.tensor(row['ids'])
-                action  = torch.tensor(row['action'])
+                action  = torch.from_numpy(row[['b1','b2','b3','b4','b5','b6','b7','b8','b9','b10','b11','b12','b13','b14','b15','b16']].astype(np.float32).values)
                 reward  = torch.tensor(row['reward'])
                 done    = torch.tensor(row['done'])
                 next_ids = torch.tensor(row['next_ids'])
@@ -100,7 +98,7 @@ class EpisodicDoomDataset(Dataset):
 
         for transition in episode[0]:
             obs.append(self.preprocess(Image.open(transition.o_t).convert("RGB")))
-            action.append(one_hot(transition.action, num_classes=self.num_actions).unsqueeze(0))
+            action.append(transition.action.unsqueeze(0))
             reward.append(transition.reward)
             done.append(transition.done)
             user_att.append(transition.player_state)
