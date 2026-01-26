@@ -11,6 +11,16 @@ ATT_PLAYER = {
     "ARMOR":0.0
 }
 
+GLOBAL_BUTTONS = [
+    "MOVE_LEFT", "MOVE_RIGHT", "MOVE_FORWARD", "MOVE_BACKWARD",
+    "TURN_LEFT", "TURN_RIGHT", "ATTACK", "USE",
+    "SELECT_NEXT_WEAPON", "SELECT_PREV_WEAPON",
+    "SPEED", "STRAFE",
+    "CROUCH", "JUMP",
+    "RELOAD", "ZOOM",
+] #actions corresponding to the global buttons with the same order
+
+
 class GamePad:
 
     def __init__(self):

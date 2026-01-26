@@ -6,9 +6,65 @@ from tqdm.auto import tqdm
 from PIL import Image
 from pathlib import Path
 from random_policy import Random_Policy
-from env_info import ATT_PLAYER, GamePad
+from env_info import ATT_PLAYER, GamePad, GLOBAL_BUTTONS
 import gymnasium
+
+from dataclasses import dataclass
+from typing import Dict, List
+
 from vizdoom import gymnasium_wrapper
+
+@dataclass
+class ButtonActionMapper:
+    """
+    Rimappa un vettore di azioni MultiBinary (ordine ENV) dentro il GamePad (ordine GLOBALE).
+    - env_buttons: ordine dei bottoni come li vede l'ambiente (cambia tra env)
+    - global_buttons: ordine canonico (chiavi del GamePad fisso nel dataset
+    """
+    env_button_names: List[str]
+    global_name_to_index: Dict[str, int]
+
+
+    @classmethod
+    # creates mapper from env
+    def from_env_and_gamepad(cls, env) -> "ButtonActionMapper":
+        # local order: how the env interprets action[i]
+        env_buttons = env.unwrapped.game.get_available_buttons()
+        env_button_names = [b.name for b in env_buttons]
+        # read global button names
+        global_name_to_index = {name: i for i, name in enumerate(GLOBAL_BUTTONS)}
+
+
+        return cls(env_button_names=env_button_names, global_name_to_index=global_name_to_index)
+
+    #from env action to gamepad
+    def apply_to_gamepad(self, action, gamepad):
+        """
+        action: array/list/np/tensor di 0/1, shape [len(env_buttons)]
+        Scrive i valori nel GamePad rispettando l'ordine globale.
+        """
+        # per sicurezza converto a lista di int
+        if hasattr(action, "tolist"):
+            a = action.tolist()
+        else:
+            a = list(action)
+        
+        assert len(a) == len(self.env_button_names), "Action length != env buttons length"
+
+        # setta solo i bottoni che esistono anche nella mappa globale
+        for env_idx, pressed in enumerate(a):
+            btn_name = self.env_button_names[env_idx] # name of the button in env (es. TURN_LEFT)
+            g_idx = self.global_name_to_index.get(btn_name, None)
+            if g_idx is None:
+                # bottone non presente nella dichiarazione globale viene ignorato
+                continue
+            gamepad[g_idx] = int(pressed)
+
+
+
+
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run rolling procedure')
     parser.add_argument("-d", "--dataset", required=False, default="Vizdoom", type=str)
@@ -27,11 +83,25 @@ if __name__ == "__main__":
     render_mode="rgb_array",
     frame_skip=10,
     max_buttons_pressed=0
-    
     )
 
+
     gamepad = GamePad()
+    mapper = ButtonActionMapper.from_env_and_gamepad(env)
     agent = Random_Policy(env.action_space, 1)
+
+    #check 
+    print("ENV buttons:", mapper.env_button_names)
+    print("GLOBAL buttons:", GLOBAL_BUTTONS)
+
+    missing = [b for b in mapper.env_button_names if b not in GLOBAL_BUTTONS]
+    extra   = [b for b in GLOBAL_BUTTONS if b not in mapper.env_button_names]
+
+    print("Buttons in env but not in global:", missing)
+    print("Buttons in global but not in env:", extra)
+        
+
+
     base_path = Path(args.dataset).joinpath(args.split)
     ids = 0
     init_episode = 0
@@ -82,9 +152,9 @@ if __name__ == "__main__":
             action = agent.act(s)
 
             
-            #print(f"action:{action}")
-            for button, stato in enumerate(action):
-                gamepad[button] = stato
+            # ---------- remap action ----------
+            gamepad.reset() #doing so: buttons that are not in the env remain 0
+            mapper.apply_to_gamepad(action, gamepad)
 
 
 
