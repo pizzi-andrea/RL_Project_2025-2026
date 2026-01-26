@@ -182,8 +182,7 @@ class Dreamer(L.LightningModule):
         )
 
         
-        self.episods_idx = []
-        self.loss_episods = [] 
+        
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
@@ -191,27 +190,26 @@ class Dreamer(L.LightningModule):
     def forward(self, obs: torch.Tensor, actions: torch.Tensor, att_user:torch.Tensor, mask:torch.Tensor|None=None) -> Dict[str, torch.Tensor]:
         B, T, C, H, W = obs.shape
 
-        # enc: [B,T,enc_dim]
+        # -- encode attribute player with obs
         enc = self.encoder(obs)
         att_user = self.att_encoder(att_user)
 
 
-        # -- fuse obs with user att
-
-        # cat fusion
+        # -- fuse obs with user att, use simple cat fusion
         enc = torch.cat([enc, att_user], dim=-1)
-        #
-
         
 
+        
+        # -- init memory
         state = self.rssm.init_state(B, device=obs.device)
 
+        # -- store temp data
         post_h, post_z, post_logits, prior_logits = [], [], [], []
-
+        
         for t in range(T):
             a_t = actions[:, t]
             x_t = enc[:, t]  # enc_x
-            state, plogits = self.rssm.observe_step(state, a_t, x_t)
+            state, plogits = self.rssm.observe_step(state, a_t, x_t, mask)
             post_h.append(state.h)
             post_z.append(state.z)
             post_logits.append(state.z_logits)
@@ -239,16 +237,16 @@ class Dreamer(L.LightningModule):
     def validation_step(self, *args, **kwargs):
         return super().validation_step(*args, **kwargs)
 
-    def get_loss_for_batch(self):
+    def _get_loss_for_batch(self, episods_idx, loss_episods):
         """get loss for batch and index episods in batch"""
-        idx_episods = torch.cat(self.episods_idx).numpy(True)
-        loss_episods = torch.cat(self.loss_episods).numpy(True)
-        self.episods_idx.clear()
-        self.loss_episods.clear()
+        idx_episods = episods_idx.numpy(True)
+        loss_episods = loss_episods.numpy(True)
+        
         return {
             "episods_idx":idx_episods, 
             "episods_loss":loss_episods
         }
+    
     
 
     def validation_step(self, batch, batch_idx):
@@ -301,8 +299,7 @@ class Dreamer(L.LightningModule):
         self.log_dict(val_log, on_step=False, on_epoch=True, prog_bar=True)
         
 
-        # Nota: non aggiorniamo self.loss_episods qui per non sporcare 
-        # le statistiche di training con i dati di validazione.
+        
         return val_log
     
     def training_step(self, batch, batch_idx):
@@ -349,8 +346,6 @@ class Dreamer(L.LightningModule):
         # --- 4. results ---
 
         loss_per_batch = total_loss_BT.mean(dim=1) 
-        self.episods_idx.append(idx_episode)
-        self.loss_episods.append(loss_per_batch)
+        r =  {"loss":loss_per_batch.mean()} | self._get_loss_for_batch(idx_episode, loss_per_batch)
 
-        r =  {"loss":loss_per_batch.mean()} | self.get_loss_for_batch()
         return r

@@ -64,6 +64,7 @@ class RSSM(nn.Module): # need specific train loop
         )
 
     def init_state(self, batch_size: int, device=None) -> RSSMState:
+        """Inizialize RSSM memory and return the state"""
         device = device or next(self.parameters()).device
         h = torch.zeros(batch_size, self.deter_dim, device=device)
         z_logits = torch.zeros(batch_size, self.L, self.K, device=device)
@@ -90,6 +91,7 @@ class RSSM(nn.Module): # need specific train loop
         return h_last.squeeze(0)  # [B,H]
     
     def imagine_step(self, prev: RSSMState, action: torch.Tensor, mask_t: Optional[torch.Tensor]= None) -> RSSMState: # [B] 1=valid 0=pad
+        """Predict next state using the 'immagination' mechanism, no input obs are required and return network state"""
         aemb = self.action_embed(action)
         zemb = self.z_embed(prev.z)
         inp = torch.cat([aemb, zemb], dim=-1)
@@ -116,6 +118,7 @@ class RSSM(nn.Module): # need specific train loop
         enc_x: torch.Tensor,
         mask_t: Optional[torch.Tensor] = None,
     ) -> Tuple[RSSMState, torch.Tensor]:
+        """Predict next state from observation and return network state"""
         aemb = self.action_embed(action)
         zemb = self.z_embed(prev.z)
         inp = torch.cat([aemb, zemb], dim=-1)
@@ -139,7 +142,6 @@ class RSSM(nn.Module): # need specific train loop
             m3 = mask_t.float().view(-1, 1, 1)
             z_logits = m3 * post_logits + (1 - m3) * prev.z_logits
             state = RSSMState(h=h, z=z, z_logits=z_logits)
-            # anche prior_logits potresti “fermarlo” se vuoi coerenza:
             return state, prior_logits
 
         state = RSSMState(h=h_new, z=z_new, z_logits=post_logits)
