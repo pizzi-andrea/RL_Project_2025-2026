@@ -126,6 +126,7 @@ class Dreamer(L.LightningModule):
         # RSSM (embed_dim deve matchare la dimensione di enc_x)
         # Se usi VAE, il modo più semplice è enc_dim == vae_latent_dim
         rssm_embed_dim = enc_dim + att_dim
+        self.rssm_embed_dim = rssm_embed_dim
 
         self.rssm = RSSM(
             action_dim=action_dim,

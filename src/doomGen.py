@@ -46,7 +46,7 @@ if __name__ == "__main__":
         sticky = 0
 
     gamepad = GamePad()
-    mapper = ButtonActionMapper.from_env_and_gamepad(env)
+    mapper = ButtonActionMapper.from_env(env)
     agent = Random_Policy(env.action_space, sticky)
 
     #check 
