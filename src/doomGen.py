@@ -75,20 +75,26 @@ if __name__ == "__main__":
     parser.add_argument('--episodic', required=False, action='store_true')
     parser.add_argument("-r", "--reload", required=False, action='store_true' )
     parser.add_argument("-m", "--metadata", required=False, action='store_true')
+    parser.add_argument("--skip_frame", required=False, default=1, type=int)
+    parser.add_argument("--sticky" ,required=False, action="store_true")
     
     
     args = parser.parse_args()
     env = gymnasium.make(
     args.env,
     render_mode="rgb_array",
-    frame_skip=10,
+    frame_skip=args.skip_frame,
     max_buttons_pressed=0
     )
 
+    if args.sticky:
+        sticky = 4
+    else:
+        sticky = 0
 
     gamepad = GamePad()
     mapper = ButtonActionMapper.from_env_and_gamepad(env)
-    agent = Random_Policy(env.action_space, 1)
+    agent = Random_Policy(env.action_space, sticky)
 
     #check 
     print("ENV buttons:", mapper.env_button_names)

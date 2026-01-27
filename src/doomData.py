@@ -3,7 +3,6 @@ import numpy as np
 import torch
 import pandas as pd
 
-from torch.nn.functional import one_hot
 from torch.nn.utils.rnn import pad_sequence
 from PIL import Image
 from pathlib import Path
