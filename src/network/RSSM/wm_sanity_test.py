@@ -5,15 +5,15 @@ from torchvision.transforms.v2 import Compose, ToImage, ToDtype
 
 from doomData import EpisodicDoomDataset, collate_episodic_fn
 from priority_functions import AdversarialReplayPriority
-from network.RSSM.rssm import DreamerWorldModel  # o dove sta davvero nel tuo progetto
-from network.RSSM.wm_train import world_model_train_step  # cambia path se necessario
+from network.RSSM.rssm import DreamerWorldModel  
+from network.RSSM.wm_train import world_model_train_step 
 
 def main():
     torch.set_float32_matmul_precision("high")
 
     # ---------- PATHS ----------
-    dataset_train = "Doom4RSSM/train"       # cambia se serve
-    vae_ckpt_path = "src/VAE_ckpts/vae.ckpt"  # cambia se serve
+    dataset_train = "Doom4RSSM/train"       
+    vae_ckpt_path = "src/VAE_ckpts/epoch=249-step=31500.ckpt" 
 
     # ---------- PREPROCESS ----------
     # Importante: ToDtype(scale=True) => immagini in [0,1], coerente con BCE.
@@ -53,7 +53,7 @@ def main():
         action_dim=action_dim,
         vae_ckpt_path=vae_ckpt_path,
         freeze_vae=True,
-        enc_dim=128,          # metti uguale al latent_dim del tuo VAE (se 128)
+        enc_dim=128,          # deve essere uguale al latent_dim del tuo VAE (se 128)
         vae_latent_dim=128,   # idem
         deter_dim=1024,
         stoch_latents=32,

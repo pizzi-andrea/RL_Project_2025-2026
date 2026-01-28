@@ -45,7 +45,7 @@ class EpisodicDoomDataset(Dataset):
         self.max_length = max_length
         
         episods = [p for p in self.base_path.iterdir()]
-        fix_columns = ["ids","action","reward","done","next_ids"]
+        fix_columns = ["ids","reward","done","next_ids", 'b1','b2','b3','b4','b5','b6','b7','b8','b9','b10','b11','b12','b13','b14','b15','b16']
         
         if preprocessor:
             self.preprocess = preprocessor

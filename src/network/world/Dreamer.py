@@ -15,7 +15,7 @@ from ..encoder.convEncoder import ConvEncoder, ConvDecoder
 # RNN network
 from ..RSSM.rssm import RSSM
 
-from utils import cat_kl_logits
+from ..world.utils import cat_kl_logits
 # -------------------------
 # VAE adaptation
 # -------------------------
@@ -54,7 +54,7 @@ class VAEEncoderAdapter(VAEAdapter):
         # x: [B,T,C,H,W] oppure [B,C,H,W]
         if x.dim() == 5:
             B, T, C, H, W = x.shape
-            x = x.view(B * T, C, H, W)
+            x = x.reshape(B * T, C, H, W)
             _, mean, _ = self.vae.encode(x)  # mean: [B*T, latent_dim]
             if self.proj is not None:
                 mean = self.proj(mean)
@@ -178,7 +178,7 @@ class Dreamer(L.LightningModule):
 
         self.att_encoder = nn.Sequential(
             nn.Linear(att_dim, out_features=att_dim),
-            nn.LayerNorm(att_dim*2),
+            nn.LayerNorm(att_dim),
             nn.SiLU()
         )
 
@@ -210,7 +210,9 @@ class Dreamer(L.LightningModule):
         for t in range(T):
             a_t = actions[:, t]
             x_t = enc[:, t]  # enc_x
-            state, plogits = self.rssm.observe_step(state, a_t, x_t, mask)
+            m_t = mask[:, t] if mask is not None else None
+            state, plogits = self.rssm.observe_step(state, a_t, x_t, mask_t=m_t)
+
             post_h.append(state.h)
             post_z.append(state.z)
             post_logits.append(state.z_logits)
@@ -350,3 +352,24 @@ class Dreamer(L.LightningModule):
         r =  {"loss":loss_per_batch.mean()} | self._get_loss_for_batch(idx_episode, loss_per_batch)
 
         return r
+    
+
+    @torch.no_grad()
+    def posterior_last_state(self, obs: torch.Tensor, actions: torch.Tensor, att_user: torch.Tensor, mask: torch.Tensor | None = None):
+        """
+        Ritorna lo stato RSSM (h,z,z_logits) all'ultimo timestep valido di ogni episodio.
+        obs: [B,T,C,H,W]
+        actions: [B,T,A] one-hot (azioni discrete)
+        mask: [B,T] (1 valid, 0 pad) opzionale
+        """
+        B, T, C, H, W = obs.shape
+        enc = self.encoder(obs)  # [B,T,enc_dim]
+        att_user_enc = self.att_encoder(att_user)
+        enc = torch.cat([enc, att_user_enc], dim=-1)
+        state = self.rssm.init_state(B, device=obs.device)
+
+        for t in range(T):
+            m_t = mask[:, t] if mask is not None else None
+            state, _ = self.rssm.observe_step(state, actions[:, t], enc[:, t], mask_t=m_t)
+
+        return state  # ultimo stato (già “fermo” dove mask=0)

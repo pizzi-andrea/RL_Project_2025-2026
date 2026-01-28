@@ -21,7 +21,7 @@ class ConvEncoder(nn.Module):
         # x: [B,T,C,H,W] or [B,C,H,W]
         if x.dim() == 5:
             B, T, C, H, W = x.shape #T is the lenght of the temporal sequence
-            x = x.view(B * T, C, H, W)
+            x = x.reshape(B * T, C, H, W)
             y = self.net(x)
             return y.view(B, T, -1) # [B*T, 1024] → [B, T, 1024]
 
