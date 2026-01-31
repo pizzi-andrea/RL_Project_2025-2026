@@ -15,7 +15,7 @@ from ..encoder.convEncoder import ConvEncoder, ConvDecoder
 # RNN network
 from ..RSSM.rssm import RSSM
 
-from ..world.utils import cat_kl_logits
+from .utils import cat_kl_logits
 # -------------------------
 # VAE adaptation
 # -------------------------
@@ -54,6 +54,8 @@ class VAEEncoderAdapter(VAEAdapter):
         # x: [B,T,C,H,W] oppure [B,C,H,W]
         if x.dim() == 5:
             B, T, C, H, W = x.shape
+            
+            
             x = x.reshape(B * T, C, H, W)
             _, mean, _ = self.vae.encode(x)  # mean: [B*T, latent_dim]
             if self.proj is not None:
@@ -74,6 +76,7 @@ class VAEDecoderAdapter(VAEAdapter):
     def __init__(self, vae: VAE, feat_dim: int):
         super().__init__(vae)
         latent_dim = vae.hparams.latent_dim
+        
         self.feat_to_latent = nn.Sequential(
             nn.Linear(feat_dim, latent_dim),
             nn.SiLU(),
@@ -83,14 +86,15 @@ class VAEDecoderAdapter(VAEAdapter):
         # feat: [B,T,D] oppure [B,D]
         if feat.dim() == 3:
             B, T, D = feat.shape
+            
             z = self.feat_to_latent(feat.view(B * T, D))          # [B*T, latent_dim]
+            z = self.vae.decode(z, (B, T, 3, 240, 320))     # output VAE: 320x240
             
-            z_j = self.vae.z_project(z).view(B * T, 256, 15, 20)  # usa pesi pretrainati
-            x = self.vae.decoder(z_j).view(B, T, 3, 240, 320)     # output VAE: 320x240
-            return x
         else:
-            
-            return self.vae.decode(z, (-1, 256, 15, 20))
+            z = self.feat_to_latent(feat)
+            z = self.vae.decode(z, (-1, 256, 15, 20))
+        
+        return z
 
 
 
@@ -162,7 +166,7 @@ class Dreamer(L.LightningModule):
             self.obs_h = 240
             self.obs_w = 320
 
-        # controller
+        # -- controller
         self.reward_head = nn.Sequential(
             nn.Linear(feat_dim, deter_dim),
             nn.SiLU(),
@@ -174,7 +178,13 @@ class Dreamer(L.LightningModule):
             nn.Linear(deter_dim, 1),
         )
 
-        # encoders
+        self.att_head = nn.Sequential(
+            nn.Linear(feat_dim, feat_dim),
+            nn.SiLU(),
+            nn.Linear(feat_dim, att_dim)
+        )
+
+        # -- encoders
 
         self.att_encoder = nn.Sequential(
             nn.Linear(att_dim, out_features=att_dim),
@@ -182,23 +192,33 @@ class Dreamer(L.LightningModule):
             nn.SiLU()
         )
 
-        
-        
-
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+    
+    def encode(self, obs, user_att):
+        enc = self.encoder(obs)
+        att_user = self.att_encoder(user_att)
+        
+        # -- fuse obs with user att, use simple cat fusion
+        enc = torch.cat([enc, att_user], dim=-1)
+        return enc
 
+    def predict_reward(self, feat):
+        return self.reward_head(feat).squeeze(-1)
+    def predict_continue(self, feat):
+        return self.cont_head(feat).squeeze(-1)
+    def predict_obs(self, feat):
+        
+        return self.decoder(feat) 
+    
+    def predict_user_att(self, feat):
+        return self.att_head(feat)
     def forward(self, obs: torch.Tensor, actions: torch.Tensor, att_user:torch.Tensor, mask:torch.Tensor|None=None) -> Dict[str, torch.Tensor]:
         B, T, C, H, W = obs.shape
 
         # -- encode attribute player with obs
-        enc = self.encoder(obs)
-        att_user = self.att_encoder(att_user)
-
-
-        # -- fuse obs with user att, use simple cat fusion
-        enc = torch.cat([enc, att_user], dim=-1)
         
+        enc = self.encode(obs, att_user)
 
         
         # -- init memory
@@ -210,9 +230,7 @@ class Dreamer(L.LightningModule):
         for t in range(T):
             a_t = actions[:, t]
             x_t = enc[:, t]  # enc_x
-            m_t = mask[:, t] if mask is not None else None
-            state, plogits = self.rssm.observe_step(state, a_t, x_t, mask_t=m_t)
-
+            state, plogits = self.rssm.observe_step(state, a_t, x_t, mask)
             post_h.append(state.h)
             post_z.append(state.z)
             post_logits.append(state.z_logits)
@@ -225,9 +243,12 @@ class Dreamer(L.LightningModule):
         prior_logits = torch.stack(prior_logits, dim=1)# [B,T,L,K]
 
         feat = torch.cat([post_h, post_z], dim=-1)     # [B,T,feat_dim]
-        x_hat = self.decoder(feat)                    # [B,T,3,H,W] (H,W dipende da VAE o conv)
-        r_hat = self.reward_head(feat).squeeze(-1)    # [B,T]
-        c_logits = self.cont_head(feat).squeeze(-1)   # [B,T]
+        
+        x_hat = self.predict_obs(feat)                    # [B,T,3,H,W] (H,W dipende da VAE o conv)
+        r_hat = self.predict_reward(feat)    # [B,T]
+        att_hat = self.predict_user_att(feat)
+        c_logits = self.predict_continue(feat)   # [B,T]
+
 
         return {
             "x_hat": x_hat,
@@ -235,6 +256,7 @@ class Dreamer(L.LightningModule):
             "c_logits": c_logits,
             "post_logits": post_logits,
             "prior_logits": prior_logits,
+            "att_hat": att_hat
         }
 
     def validation_step(self, *args, **kwargs):
@@ -270,9 +292,10 @@ class Dreamer(L.LightningModule):
         # Usiamo 'none' per mantenere il controllo sulle dimensioni prima della media
         recon = F.binary_cross_entropy(out["x_hat"], obs, reduction="none").mean(dim=(2,3,4))
         reward_loss = F.mse_loss(out["r_hat"], rewards, reduction="none")
+        att_loss = F.mse_loss(out["att_hat"], user_att, reduction="none").sum(dim=-1)
         cont_loss = F.binary_cross_entropy_with_logits(out["c_logits"], cont, reduction="none")
         
-        L_pred_BT = recon + reward_loss + cont_loss 
+        L_pred_BT = recon + reward_loss + cont_loss + att_loss
 
         # 2. Calcolo KL Divergence
         # In validazione la KL ci dice quanto il "prior" (predizione) si allontana dal "posterior" (realtà)
@@ -295,6 +318,7 @@ class Dreamer(L.LightningModule):
             "val_loss": total_loss_BT.mean(),
             "val_recon_loss": recon.mean(),
             "val_reward_loss": reward_loss.mean(),
+            "val_att_loss": att_loss.mean(),
             "val_reward_mae": reward_mae,
             "val_kl": kl_val_BT.mean()
         }
@@ -320,11 +344,12 @@ class Dreamer(L.LightningModule):
         # Ricostruzione immagini
         recon = F.binary_cross_entropy(out["x_hat"], obs, reduction="none").mean(dim=(2,3,4))  # [B,T]
         reward_loss = F.mse_loss(out["r_hat"], rewards, reduction="none")                      # [B,T]
+        att_loss = F.mse_loss(out["att_hat"], user_att, reduction="none").sum(dim=-1)
         cont_loss = F.binary_cross_entropy_with_logits(out["c_logits"], cont, reduction="none")# [B,T]
         
         # --- 1. Calcolo componenti Predizione [B, T] ---
         
-        L_pred_BT = recon + reward_loss + cont_loss 
+        L_pred_BT = recon + reward_loss + cont_loss + att_loss
 
         # --- 2. KL components ---
         q_logits = out["post_logits"]
@@ -352,24 +377,3 @@ class Dreamer(L.LightningModule):
         r =  {"loss":loss_per_batch.mean()} | self._get_loss_for_batch(idx_episode, loss_per_batch)
 
         return r
-    
-
-    @torch.no_grad()
-    def posterior_last_state(self, obs: torch.Tensor, actions: torch.Tensor, att_user: torch.Tensor, mask: torch.Tensor | None = None):
-        """
-        Ritorna lo stato RSSM (h,z,z_logits) all'ultimo timestep valido di ogni episodio.
-        obs: [B,T,C,H,W]
-        actions: [B,T,A] one-hot (azioni discrete)
-        mask: [B,T] (1 valid, 0 pad) opzionale
-        """
-        B, T, C, H, W = obs.shape
-        enc = self.encoder(obs)  # [B,T,enc_dim]
-        att_user_enc = self.att_encoder(att_user)
-        enc = torch.cat([enc, att_user_enc], dim=-1)
-        state = self.rssm.init_state(B, device=obs.device)
-
-        for t in range(T):
-            m_t = mask[:, t] if mask is not None else None
-            state, _ = self.rssm.observe_step(state, actions[:, t], enc[:, t], mask_t=m_t)
-
-        return state  # ultimo stato (già “fermo” dove mask=0)

@@ -141,8 +141,9 @@ class VAE(L.LightningModule):
 
     
     def decode(self, z, reshape_size:tuple):
+        
         z_j = self.z_project(z)
-        z_j = z_j.view(shape=reshape_size)
+        z_j = z_j.view(reshape_size)
         x = self.decoder(z_j)
         return x
 

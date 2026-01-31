@@ -11,6 +11,7 @@ from torchvision.transforms.v2 import Compose, Resize, ToImage, ToDtype
 from tqdm import tqdm
 from episode import Episode, Transition
 from priority_functions import PriorityExperienceReplay
+from env_info import ATT_PLAYER_NAME
 
 class DoomDataset (Dataset):
     """Simple dataset implementation for VAE pre-training"""
@@ -45,8 +46,6 @@ class EpisodicDoomDataset(Dataset):
         self.max_length = max_length
         
         episods = [p for p in self.base_path.iterdir()]
-        fix_columns = ["ids","reward","done","next_ids", 'b1','b2','b3','b4','b5','b6','b7','b8','b9','b10','b11','b12','b13','b14','b15','b16']
-        
         if preprocessor:
             self.preprocess = preprocessor
         else:
@@ -64,7 +63,7 @@ class EpisodicDoomDataset(Dataset):
 
             episode = []
             t = pd.read_csv(t_path)
-            user_att = [att for att in t.columns if att not in fix_columns]
+            user_att = ATT_PLAYER_NAME
             
             for _, row in t.iterrows():
                 ids = torch.tensor(row['ids'])
@@ -116,11 +115,21 @@ class EpisodicDoomDataset(Dataset):
 
 def collate_episodic_fn(batch):
     """Collate function for dataloader pytorch"""
-    obs = pad_sequence([b["obs"] for b in batch], batch_first=True)        # [B, max_T, C, H, W]
-    action = pad_sequence([b["action"] for b in batch], batch_first=True)  # [B, max_T]
-    reward = pad_sequence([b["reward"] for b in batch], batch_first=True)
-    done = pad_sequence([b["done"] for b in batch], batch_first=True)
-    user_att = pad_sequence([b["user_att"] for b in batch], batch_first=True)
+    
+    #  collect values in dataset
+    batch_obs  = [b["obs"] for b in batch]
+    action_obs = [b["action"] for b in batch]
+    reward_obs = [b["reward"] for b in batch]
+    dones_obs  = [b["done"] for b in batch]
+    user_att   = [b["user_att"] for b in batch]
+    
+    
+    # pad different length sequence
+    obs = pad_sequence(batch_obs, batch_first=True)        # [B, max_T, C, H, W]
+    action = pad_sequence(action_obs, batch_first=True)  # [B, max_T]
+    reward = pad_sequence(reward_obs, batch_first=True)
+    done = pad_sequence(dones_obs, batch_first=True)
+    user_att = pad_sequence(user_att, batch_first=True)
 
     mask = pad_sequence([torch.ones(len(b["obs"])) for b in batch], batch_first=True)
 
