@@ -10,7 +10,7 @@ import torch
 from torch import no_grad
 from env_info import ATT_PLAYER
 from priority_functions import CuriosityReplayPriority, CountBasedPriority, AdversarialReplayPriority
-from doomData import DoomDataset, EpisodicDoomDataset, collate_episodic_fn
+from doomData import DoomDataset, EpisodicDoomDataset, collate_fn
 from doomData import Transition, Episode
 from network.encoder.VAE import VAE
 from network.RSSM.rssm import RSSM
@@ -25,25 +25,27 @@ from torchvision.transforms.v2 import Compose, ToImage, ToDtype
 import gymnasium
 from vizdoom import gymnasium_wrapper
 
+torch.set_float32_matmul_precision('medium')
 def main():
 
     log_experiment = Path("Experiment")
-    PER4train = AdversarialReplayPriority(300)
+    PER4train = AdversarialReplayPriority(50)
 
     vae_train_loader = DataLoader(DoomDataset("Doom4VAE/train", resize=(240,320)), batch_size=32,     shuffle=True, num_workers=os.cpu_count()-1)
     vae_valid_loader = DataLoader(DoomDataset("Doom4VAE/validation", resize=(240,320)), batch_size=32, shuffle=False, num_workers=os.cpu_count()-1)
     
     rssm_train_loader = DataLoader(EpisodicDoomDataset("Doom4RSSM/train", max_length=300, priority_buffer=PER4train, preprocessor=Compose(
         [ToImage(), ToDtype(dtype=torch.float32, scale=True)]
-    )), batch_size=8, shuffle=True, collate_fn=collate_episodic_fn, num_workers=os.cpu_count()-1)
+    )), batch_size=2, shuffle=True, collate_fn=collate_fn, num_workers=8)
 
     
-    vae_trainer =  Trainer(logger=TensorBoardLogger(log_experiment.joinpath("VAE")), max_epochs=2)
+    vae_trainer =  Trainer(logger=TensorBoardLogger(log_experiment.joinpath("VAE")), max_epochs=10)
     rssm_trainer = Trainer(
         
                 logger=TensorBoardLogger(log_experiment.joinpath("RSSM")),
                 callbacks=[PERAdapter(PER4train)],
-                max_epochs=1)
+                max_epochs=5,
+                log_every_n_steps=10)
     
     
   

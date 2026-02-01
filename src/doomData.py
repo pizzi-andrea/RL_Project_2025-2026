@@ -109,50 +109,52 @@ class EpisodicDoomDataset(Dataset):
             "reward": torch.stack(reward),        # [T]
             "done": torch.stack(done),            # [T]
             "user_att": torch.stack(user_att),    # [T, A]
-            "priority_idx": torch.tensor(p_idx),
+            "priority_idx": torch.tensor(p_idx, requires_grad=False),
         }
         
 
-def collate_episodic_fn(batch):
-    """Collate function for dataloader pytorch"""
-    
-    #  collect values in dataset
-    batch_obs  = [b["obs"] for b in batch]
-    action_obs = [b["action"] for b in batch]
-    reward_obs = [b["reward"] for b in batch]
-    dones_obs  = [b["done"] for b in batch]
-    user_att   = [b["user_att"] for b in batch]
-    
-    
-    # pad different length sequence
-    obs = pad_sequence(batch_obs, batch_first=True)        # [B, max_T, C, H, W]
-    action = pad_sequence(action_obs, batch_first=True)  # [B, max_T]
-    reward = pad_sequence(reward_obs, batch_first=True)
-    done = pad_sequence(dones_obs, batch_first=True)
-    user_att = pad_sequence(user_att, batch_first=True)
+from torch.nn.utils.rnn import pad_sequence
+import torch
 
-    mask = pad_sequence([torch.ones(len(b["obs"])) for b in batch], batch_first=True)
+def collate_fn(batch):
+ 
+    batch_obs = [b["obs"] for b in batch]
+    batch_action = [b["action"] for b in batch]
+    batch_reward = [b["reward"] for b in batch]
+    batch_done = [b["done"] for b in batch]
+    batch_user_att = [b["user_att"] for b in batch]
+    batch_idx = torch.stack([b["priority_idx"] for b in batch])
+    
+    
+    obs = pad_sequence(batch_obs, batch_first=True)
+    
+    
+    action = pad_sequence(batch_action, batch_first=True)
+    reward = pad_sequence(batch_reward, batch_first=True)
+    done = pad_sequence(batch_done, batch_first=True).float()
+    user_att = pad_sequence(batch_user_att, batch_first=True)
 
-    priority_idx = torch.cat([b["priority_idx"] for b in batch], dim=0)
-
+    mask = pad_sequence([torch.ones(len(b), dtype=torch.float32) for b in batch_obs], batch_first=True)
+    #print(action.shape)
+    #print(reward.shape)
+    #print(done.shape)
+    #exit()
     return {
         "obs": obs,
         "action": action,
         "reward": reward,
         "done": done,
-        "user_att": user_att,
         "mask": mask,
-        "priority_idx": priority_idx
+        "user_att": user_att,
+        "priority_idx": batch_idx
     }
-
-
 if __name__ == "__main__":
     dataset_base = "Doom4RSSM/train"
     from priority_functions import CountBasedPriority, AdversarialReplayPriority
     buff = AdversarialReplayPriority(500)
     d = EpisodicDoomDataset(dataset_base, 30, buff)
 
-    loader = DataLoader(d, batch_size=16, collate_fn=collate_episodic_fn)
+    loader = DataLoader(d, batch_size=16, collate_fn=collate_fn)
 
     idx = 0
     for b in loader:

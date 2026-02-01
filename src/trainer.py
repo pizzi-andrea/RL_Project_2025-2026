@@ -5,11 +5,12 @@ from PIL import Image
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch import no_grad
 from env_info import ATT_PLAYER
 from priority_functions import CuriosityReplayPriority, CountBasedPriority, AdversarialReplayPriority
-from doomData import DoomDataset, EpisodicDoomDataset, collate_episodic_fn
+from doomData import DoomDataset, EpisodicDoomDataset, collate_fn
 from doomData import Transition, Episode
 from network.encoder.VAE import VAE
 from network.RSSM.rssm import RSSM
@@ -20,6 +21,7 @@ from lightning import Trainer as LTrainer
 from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 from network.controller.Policy import DreamerAgent
+from torchvision.transforms.v2 import Compose, ToImage, ToDtype
 import gymnasium
 from vizdoom import gymnasium_wrapper
 
@@ -32,7 +34,7 @@ class Trainer(ABC):
         
     
     @abstractmethod
-    def fit(self, path_dataset_train, path_dataset_validation, batch_size, **train_args):
+    def fit(self, path_dataset_train, path_dataset_validation, batch_size):
         pass
 
     def get_model(self):
@@ -41,16 +43,16 @@ class Trainer(ABC):
 
 class VAE_Trainer(Trainer):
 
-    def __init__(self, log_directory, **model_params):
+    def __init__(self, log_directory, latent_dim:int):
         
         super().__init__(log_directory)
-        self.model = VAE(latent_dim=model_params["latent_dim"])
+        self.model = VAE(latent_dim=latent_dim)
         self.logger = TensorBoardLogger(log_directory, name=False)
     
-    def fit(self, path_dataset_train:str, path_dataset_validation:str, batch_size:int, epochs, **train_args):
+    def fit(self, path_dataset_train:str, path_dataset_validation:str, batch_size:int, epochs):
         data_train = DataLoader(DoomDataset(path_dataset_train, resize=(240,320)), batch_size=batch_size,     shuffle=True, num_workers=os.cpu_count()-1)
         data_valid = DataLoader(DoomDataset(path_dataset_validation, resize=(240,320)), batch_size=batch_size, shuffle=False, num_workers=os.cpu_count()-1)
-        trainer = LTrainer(max_epochs=epochs, logger=TensorBoardLogger("VAE_logs"))
+        trainer = LTrainer(max_epochs=epochs, logger=TensorBoardLogger(self.log_directory))
 
         trainer.fit(self.model, train_dataloaders=data_train, val_dataloaders=data_valid)
 
@@ -58,19 +60,43 @@ class VAE_Trainer(Trainer):
     
 class DreamerXP_Trainer(Trainer):
 
-    def __init__(self, log_directory, **model_params):
+    def __init__(self, log_directory, action_space:int, vae:VAE|str|None=None, dreamer:Dreamer|str|None=None, agent:DreamerAgent|str|None=None):
         
         super().__init__(log_directory)
-        
-        self.envs_id = model_params["envs"]
-        self.logger = TensorBoardLogger(log_directory, name=False)
-        self.dynamic = Dreamer(vae_ckpt_path="VAE_ckpts/epoch=249-step=31500.ckpt")
+        self.logger = TensorBoardLogger(self.log_directory, name=False)
+        if isinstance(vae, str):
+            vae = VAE.load_from_checkpoint(vae)
+        elif isinstance(vae, VAE):
+            vae = vae
+        elif not vae:
+            vae = VAE(latent_dim=128)
+        else:
+            raise "No VAE class|weighs"
         
 
-        self.agent = DreamerAgent(self.dynamic.rssm)
+        if isinstance(dreamer, Dreamer):
+            self.dynamic = dreamer
+        elif isinstance(dreamer, str):
+            self.dynamic = Dreamer.load_from_checkpoint(dreamer)
+        elif not dreamer:
+            self.dynamic = Dreamer()
+        else:
+            raise "No dreamer class|weighs"
+
+        if isinstance(agent, DreamerAgent):
+            self.dynamic = dreamer
+        elif isinstance(agent, str):
+            self.dynamic = DreamerAgent.load_from_checkpoint(dreamer)
+        elif not agent:
+            self.dynamic = DreamerAgent(self.dynamic, action_space_dim=action_space)
+        else:
+            raise "No all DreamerXP components are initialized"
+        
+        
         
     @no_grad
-    def simulate(self, env_id:str, episods:int, buffer:AdversarialReplayPriority):
+    def simulate(self, episods:int, buffer:AdversarialReplayPriority, env_id:str):
+        
         env = gymnasium.make(env_id, max_episode_steps=episods, render_mode="rgb_array")
         stat_name = [v.name for v in env.unwrapped.game.get_available_game_variables()]
         _player = OrderedDict()
@@ -109,7 +135,7 @@ class DreamerXP_Trainer(Trainer):
                 
                     
                     dict_diff = {k: 0 for k in att_diff}
-                   
+                
                     
                     ids = torch.tensor(ids)
                     action  = torch.tensor(a)
@@ -124,48 +150,40 @@ class DreamerXP_Trainer(Trainer):
                     episode.append(Transition(ids, tmp_file.name, action, reward, next_ids, done, _user_att))
                     ids +=1
             
-            buffer.store(Episode(episode))
+            buffer.store(Episode(episode, max_length=self.max_length))
 
 
 
 
 
-    def fit(self, path_dataset_train:str, env_id:str, path_dataset_validation:str, batch_size:int, epochs:int, **train_args):
-
-        dataset_train = EpisodicDoomDataset(path_dataset_train, max_length=train_args["episode_length"], priority_buffer=train_args["priority_buffer_train"], preprocessor=train_args["preprocessor"])
-        dataset_validation =  EpisodicDoomDataset(path_dataset_validation, max_length=train_args["episode_length"], priority_buffer=train_args["priority_buffer_validation"], preprocessor=train_args["preprocessor"])
-        
-        buff_train = train_args["priority_buffer_train"]
-        buff_validation = train_args["priority_buffer_validation"]
+    def fit(self, path_dataset_train:str, path_dataset_validation:str, buffer_train, buffer_validation,  train_epoch:int, batch_size:int, epochs:int, episode_length:int = 300, preprocess:Compose=Compose([ToImage(), ToDtype(dtype=torch.float32, scale=True)]), random_time:int=1, envs:list[str]=["VizdoomBasic-v0"]):
+        self.max_length = episode_length
+        dataset_train = EpisodicDoomDataset(path_dataset_train, max_length=episode_length, priority_buffer=buffer_train, preprocessor=preprocess)
+        dataset_validation =  EpisodicDoomDataset(path_dataset_validation, max_length=episode_length, priority_buffer=buffer_validation, preprocessor=preprocess)
         
         loader_train = DataLoader(dataset_train, batch_size=batch_size, shuffle=True, num_workers=os.cpu_count()-1, collate_fn=collate_episodic_fn)
         loader_validation = DataLoader(dataset_validation, batch_size=batch_size, shuffle=True, num_workers=os.cpu_count()-1, collate_fn=collate_episodic_fn)
         
 
         epoch_idx = 0
-        train = train_args["train_epochs"]
-        validation = train_args["validation_epochs"]
-        random_time = train_args["random_time"]
-        adapter = PERAdapter(buff_train)
-        trainer = LTrainer(callbacks=[adapter], max_epochs=train)
+        train = train_epoch
+        
+        adapter = PERAdapter(buffer_train)
+        trainer = LTrainer(callbacks=[adapter], max_epochs=train, logger=self.logger)
 
         for iter in range(1, epochs +1):
             
 
            # -- train phase
-            trainer.fit(self.dynamic, loader_train, loader_validation,ckpt_path=self.log_directory)
-
-            for iter_val in range(1,validation+1):
-                self.simulate(...)
-        
-        
-        
+            trainer.fit(self.dynamic, loader_train, loader_validation)
 
 
-
+            if not epoch_idx < random_time:
+                for env_id in envs:
+                    pass
+                    #self.simulate(env_id, 1, buffer_train)
+                    #self.simulate(env_id, 1, buffer_validation)
             
-
-        
         return self.model
         
         

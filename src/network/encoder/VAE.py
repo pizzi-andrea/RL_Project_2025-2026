@@ -1,175 +1,132 @@
 import os
-from torch.optim import Adam
-from pathlib import Path
-from torch import nn
-from torchvision.utils import save_image
-import lightning as L
 import torch
+from torch import nn
+from torch.optim import Adam
 import torchvision
-from random import randint
-torch.set_float32_matmul_precision('high')
+import lightning as L
 
 class VAE(L.LightningModule):
-    def __init__(self, latent_dim:int) -> None:
+    def __init__(self, latent_dim: int):
         super().__init__()
+        self.save_hyperparameters()
+        
+        """Simple convolutional encoder for fixed size image"""
         self.encoder = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=4, stride=2, padding=1),   # 320x240 -> 160x120
+            nn.Conv2d(3, 32, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),  # 160x120 -> 80x60
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1), # 80x60 -> 40x30
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),# 40x30 -> 20x15
+            nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),
             nn.ReLU()
         )
 
-        # ---------------- Latent layers ----------------
+        """Emb computation"""
         self.flatten_dim = 256 * 15 * 20
         self.mean_predictor = nn.Linear(self.flatten_dim, latent_dim)
         self.variance_predictor = nn.Linear(self.flatten_dim, latent_dim)
-        self.z_project = nn.Linear(latent_dim, self.flatten_dim)         # per il decoder
+        self.z_project = nn.Linear(latent_dim, self.flatten_dim)
 
-        # ---------------- Decoder ----------------
+        """Simple decoder convolutional"""
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(256, 128, 4, 2, 1),  # 20x15 -> 40x30
+            nn.ConvTranspose2d(256, 128, 4, 2, 1),
             nn.ReLU(),
-            nn.ConvTranspose2d(128, 64, 4, 2, 1),   # 40x30 -> 80x60
+            nn.ConvTranspose2d(128, 64, 4, 2, 1),
             nn.ReLU(),
-            nn.ConvTranspose2d(64, 32, 4, 2, 1),    # 80x60 -> 160x120
+            nn.ConvTranspose2d(64, 32, 4, 2, 1),
             nn.ReLU(),
-            nn.ConvTranspose2d(32, 3, 4, 2, 1),     # 160x120 -> 320x240
-            nn.Sigmoid()
+            nn.ConvTranspose2d(32, 3, 4, 2, 1),
+            
         )
-        
-        self.save_hyperparameters()
-        
-        
-    
-    def setup(self, stage:str):
-        pass
-    
-    # copy by https://github.com/kuc2477/pytorch-vae/blob/master/model.py
-    def reconstruction_loss(self, x_reconstructed, x):
-        return nn.BCELoss(reduction="sum")(x_reconstructed, x) / x.size(0)
 
-    def kl_divergence_loss(self,x, mean, logvar):
-        return -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp()) / x.size(0)
+    def encode(self, x):
+        """Encode image in latent distribution"""
+        x_encoded = self.encoder(x)
+        x_flat = x_encoded.view(x_encoded.size(0), -1)
+        mean = self.mean_predictor(x_flat)
+        logvar = self.variance_predictor(x_flat)
+        return mean, logvar
+
+    def reparameterize(self, mean, logvar):
+        """Make sample reparametrizable"""
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mean + std * eps
+
+    def decode(self, z):
+        """Decode latent vector in image space"""
+        z_proj = self.z_project(z)
+        z_proj = z_proj.view(-1, 256, 15, 20)
+        x_hat = self.decoder(z_proj)
+        return x_hat
+
+    def forward(self, x):
+        """Forward for inference"""
+        mean, logvar = self.encode(x)
+        z = self.reparameterize(mean, logvar)
+        x_hat = self.decode(z)
+        return x_hat, mean, logvar
+
+    def _compute_loss(self, x, x_hat, mean, logvar):
+        
+        recon_loss = nn.functional.binary_cross_entropy_with_logits(x_hat, x, reduction="sum")
+        
+        # KL Divergence
+        kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
+        
+        
+        batch_size = x.size(0)
+        recon_loss = recon_loss / batch_size
+        kl_loss = kl_loss / batch_size
+        
+        return recon_loss, kl_loss
 
     def training_step(self, batch, batch_idx):
-        y, mean, var = self.forward(batch)
 
-        recon_loss = self.reconstruction_loss(y, batch)
-        kl_loss = self.kl_divergence_loss(y, mean, var)
+        # Eseguiamo i passaggi esplicitamente qui invece che in forward per chiarezza nel training
+        mean, logvar = self.encode(batch)
+        z = self.reparameterize(mean, logvar)
+        x_hat = self.decode(z) 
 
+        recon_loss, kl_loss = self._compute_loss(batch, x_hat, mean, logvar)
         loss = recon_loss + 0.001 * kl_loss
 
-        self.log_dict(
-            {
-                "train_loss": loss,
-                "train_recon": recon_loss,
-                "train_kl": kl_loss,
-            },
-            on_step=True,
-            on_epoch=True,
-            prog_bar=True,
-        )
+        self.log_dict({
+            "train_loss": loss,
+            "train_recon": recon_loss,
+            "train_kl": kl_loss
+        }, prog_bar=True)
+        
         return loss
 
     def validation_step(self, batch, batch_idx):
-        start = randint(0, len(batch) - 3)
-        y , mean, var = self.forward(batch)
-        sample_imgs = batch[start:start+3]
-        y_sample = y[start:start+3]
         
-        grid_true = torchvision.utils.make_grid(nrow=3, tensor=sample_imgs)
-        grid_pred = torchvision.utils.make_grid(nrow=3, tensor=y_sample)
 
-        grid = torch.hstack((grid_true, grid_pred))
-        log_dir = self.trainer.logger.log_dir or self.trainer.default_root_dir
+        
     
-        # Costruisci il nome file
-        filename = f"grid_epoch_{self.current_epoch}.png"
-        save_path = os.path.join(log_dir, filename)
+        mean, logvar = self.encode(batch)
+        z = mean # In validazione usiamo la media, non il campionamento casuale solitamente
+        x_hat_logits = self.decode(z)
         
-        save_image(grid, save_path)
-        #self.logger.experiment.add_image('example_images', grid, 0)
+        recon_loss, kl_loss = self._compute_loss(batch, x_hat_logits, mean, logvar)
+        val_loss = recon_loss + 0.001 * kl_loss
 
-        recon_loss = self.reconstruction_loss(y, batch)
-        kl_loss = self.kl_divergence_loss(y, mean, var)
+        self.log("val_loss", val_loss, prog_bar=True)
 
-        loss = recon_loss + 0.001 * kl_loss
-
-        self.log_dict(
-            {
-                "validation_loss": loss,
-                "validation_recon": recon_loss,
-                "validation_kl": kl_loss,
-            },
-            prog_bar=True,
-        )
-    
-    def test_step(self, batch, batch_idx):
-        pass
-    
-    def predict_step(self, batch, batch_idx):
-        y, mean, var = self.forward(batch)
-        
-        #self.logger.experiment.add_image('example_images', grid, 0)
-        return (y, mean)
-
-        
+        # Salvataggio immagini: SOLO sul primo batch per evitare I/O inutile
+        if batch_idx == 0:
+            x_hat_img = torch.sigmoid(x_hat_logits) # Applichiamo sigmoid per visualizzazione
+            n = min(batch.size(0), 8)
+            grid = torchvision.utils.make_grid(torch.cat([batch[:n], x_hat_img[:n]]), nrow=n)
+            
+            # Log su tensorboard/logger
+            self.logger.experiment.add_image('val_reconstruction', grid, self.current_epoch)
+            
+            # local log
+            log_dir = self.trainer.log_dir or "."
+            save_path = os.path.join(log_dir, f"epoch_{self.current_epoch}.png")
+            torchvision.utils.save_image(grid, save_path)
 
     def configure_optimizers(self):
-        return Adam(self.parameters(), lr=0.001)
-
-    def encode(self, x):
-        encode_img = self.encoder(x)
-        mean_var = encode_img.view(encode_img.size(0), -1)
-
-        mean = self.mean_predictor(mean_var)
-        var = self.variance_predictor(mean_var)
-
-        # reparameterization trick
-        std = torch.exp(0.5 * var)
-        eps = torch.randn_like(std)
-        if self.training:
-            z = mean + std * eps
-        else:
-            z = mean
-        
-        return z, mean, var
-
-    
-    def decode(self, z, reshape_size:tuple):
-        
-        z_j = self.z_project(z)
-        z_j = z_j.view(reshape_size)
-        x = self.decoder(z_j)
-        return x
-
-    def forward(self, x):
-        z, mean , var = self.encoder(x)
-
-        if self.train: # in train decode z to evaluate the decoder
-            x_hat = self.decode(z,reshape_size=(-1, 256, 15, 20))
-            return x_hat, mean, var
-
-        return z, mean, var   # work in latent space when not in train     
-        
-
-
-
-
-    
-    
-        
-
-    
-
-
-
-
-
-
-
-        
+        return Adam(self.parameters(), lr=1e-3)

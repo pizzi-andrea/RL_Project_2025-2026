@@ -125,6 +125,8 @@ class RSSM(nn.Module): # need specific train loop
         """Masck padding frame and return masked RSSM state"""
         #print(h_new.shape)
         #print(z_new.shape)
+        #print(mask.shape)
+        #exit()
         if mask is not None:
             m = mask.float().unsqueeze(dim=-1)
             h = m * h_new + (1 - m) * prev.h
@@ -159,13 +161,13 @@ class RSSM(nn.Module): # need specific train loop
         mask_t: Optional[torch.Tensor] = None,
     ) -> Tuple[RSSMState, torch.Tensor]:
         """Predict next state from observation and return network state"""
-
+        
         # -- convert in homogeneus latent spaces
         emb_action = self.action_embed(action)
         emb_latent = self.z_embed(state.z)
         # -- 
        
-        
+        #print(f"DEBUG: emb_action shape {emb_action.shape}, emb_latent shape {emb_latent.shape}")
         x = torch.cat([emb_action, emb_latent], dim=-1)
         
         

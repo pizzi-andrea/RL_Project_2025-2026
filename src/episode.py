@@ -3,7 +3,6 @@ from torch import Tensor
 import numpy as np
 
 from functools import total_ordering
-from collections import deque
 
 @total_ordering
 class Transition:
@@ -27,7 +26,7 @@ class Episode:
         if short:
             transition.sort()
         
-        self._data = deque(transition, max_length)
+        self._data = list(transition[:max_length])
     
     def __getitem__(self, idx):
         return self._data[idx]
