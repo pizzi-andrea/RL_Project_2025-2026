@@ -79,11 +79,7 @@ class DreamerAgent(L.LightningModule):
         
     def setup(self, stage):
         
-        self.freeze_dreamer()
-    
-    def freeze_dreamer(self):
-        for param in self.dreamer_model.parameters():
-            param.requires_grad = False
+        self.dreamer_model.freeze_model()
     
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=0.001)
