@@ -1,9 +1,16 @@
+from collections import OrderedDict
 from pathlib import Path
 import lightning as L
+import numpy as np
 from torch import Tensor, nn
 import torch
 import torchvision
 from ..world.Dreamer import Dreamer
+import gymnasium
+from PIL import Image
+from torchvision.transforms.functional import to_tensor
+from vizdoom import gymnasium_wrapper
+
 class Policy(nn.Module):
     def __init__(self, feat_dim:int, action_space_dim:int):
         super().__init__()
@@ -40,9 +47,9 @@ class Policy(nn.Module):
 
 
 class DreamerAgent(L.LightningModule):
-    def __init__(self, dreamer_model:Dreamer|str, action_space_dim:int, entropy_coef:int=0.1,horizont:int=15, burn_in:int=10):
+    def __init__(self, dreamer_model:Dreamer|str, action_space_dim:int, entropy_coef:int=0.0003,horizont:int=15, burn_in:int=10):
         super().__init__()
-        
+        self.save_hyperparameters()
         # import dreamer model or weigths
         if isinstance(dreamer_model, str):
             self.dreamer_model = Dreamer.load_from_checkpoint(dreamer_model)
@@ -53,13 +60,12 @@ class DreamerAgent(L.LightningModule):
         self.rssm = dreamer_model.rssm
         self.entropy_coef = entropy_coef
         
-      
+        self.validation_env = gymnasium.make("VizdoomBasic-v0", render_mode="human")
         self.emb_dim = self.rssm.deter_dim + (self.rssm.L*self.rssm.K)
         self.action_space_dim = action_space_dim
         self.horizont = horizont
         self.burn_in = burn_in
         self.policy = Policy(self.emb_dim, self.action_space_dim)
-        feat_dim = dreamer_model.rssm_embed_dim
         self.value_estimator = nn.Sequential(
             nn.Linear(self.emb_dim, self.emb_dim * 2),
             nn.SiLU(),
@@ -69,10 +75,15 @@ class DreamerAgent(L.LightningModule):
         )
 
         
+
+        
     def setup(self, stage):
         
-        self.dreamer_model = self.dreamer_model.eval()
-        self.rssm = self.rssm.eval()
+        self.freeze_dreamer()
+    
+    def freeze_dreamer(self):
+        for param in self.dreamer_model.parameters():
+            param.requires_grad = False
     
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=0.001)
@@ -141,20 +152,34 @@ class DreamerAgent(L.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        obs = batch["obs"][:, self.burn_in]
-        actions = batch["action"][:, self.burn_in]
-        #rewards = batch["reward"][:, self.burn_in]
-        #cont = batch["done"][:, self.burn_in]
+        return 0
+        game, _ = self.validation_env.reset()
+        s, user_att = game["screen"], game["gamevariables"]
+        action = np.zeros(16, dtype=np.float32)
+        mean_rewards = []
+        done = False
+        rssm_state = None 
+    
         
-        #idx_episode = batch["priority_idx"][:, self.burn_in]
-        user_att = batch["user_att"][:, self.burn_in]
-        mask = batch["mask"][:, self.burn_in]
-
-        _ = self.forward(obs, actions, user_att, mask)
-
-        self.log_dict({
-            "validation_loss": 0.0
-        })
+        
+        while not done:
+            s_t = to_tensor(s).to(self.device).unsqueeze(0).unsqueeze(0)
+            # unsqueeze(0) due volte per ottenere [B=1, T=1, ...]
+            a_t = torch.from_numpy(action).float().unsqueeze(0).unsqueeze(0).to(self.device)
+            u_t = torch.from_numpy(np.ones(shape=6)).float().unsqueeze(0).unsqueeze(0).to(self.device)
+            print(u_t)
+            out, rssm_state = self(s_t, a_t, u_t, rssm_state)
+            
+            # Rimuovi B e T per l'ambiente
+            action = out.squeeze(0).squeeze(0).cpu().numpy()
+            
+            game, reward, term, trunc, _ = self.validation_env.step(action)
+            s, user_att = game["screen"], game["gamevariables"]
+            mean_rewards.append(reward)
+            done = term or trunc
+        
+        self.log("val_reward", np.mean(mean_rewards), prog_bar=True)
+        return np.mean(mean_rewards)
 
     def forward(self, obs, action, user_att, mask=None):
         
@@ -164,13 +189,7 @@ class DreamerAgent(L.LightningModule):
         # -- fuse obs with user att, use simple cat fusion
         enc = self.dreamer_model.encode(obs, user_att)
 
-
-        
-        
-
         # -- store temporal informations
-        
-        
         rssm_state = self.rssm.init_state(B, obs.device)
         
         reward = []
@@ -250,7 +269,7 @@ class DreamerAgent(L.LightningModule):
                 actions.append(action_pred)
             
             actions = torch.stack(actions, dim=1)
-            return actions
+            return actions, rssm_state
 
 
                 

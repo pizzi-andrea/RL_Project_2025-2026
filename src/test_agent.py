@@ -10,7 +10,7 @@ from network.controller.Policy import DreamerAgent
 # 1) carico dataset episodico (quello che già usi)
 buff = AdversarialReplayPriority(500)
 ds = EpisodicDoomDataset("Doom4RSSM/train", max_length=30, priority_buffer=buff)
-dl = DataLoader(ds, batch_size=4, collate_fn=collate_episodic_fn, num_workers=10)
+dl = DataLoader(ds, batch_size=8, collate_fn=collate_episodic_fn, num_workers=12)
 
 # 2) carico/creo world model (qui metto il ckpt se c'è)
 wm = Dreamer(
@@ -36,4 +36,4 @@ trainer = L.Trainer(
     enable_model_summary=False,
     log_every_n_steps=1,
 )
-trainer.fit(agent, dl)
+trainer.fit(agent, dl, dl)
