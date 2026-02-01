@@ -62,6 +62,32 @@ class ButtonActionMapper:
                 continue
             gamepad[g_idx] = int(pressed)
 
+
+    def apply_to_env(self, gamepad):
+        """
+        Converte GamePad (ordine globale) → azione per env (ordine env).
+        Ritorna una lista di 0/1 lunga len(env_buttons).
+        """
+        env_action = [0] * len(self.env_button_names)
+
+        for env_idx, btn_name in enumerate(self.env_button_names):
+            g_idx = self.global_name_to_index.get(btn_name, None)
+            if g_idx is None:
+                continue
+            env_action[env_idx] = int(gamepad[g_idx])
+
+        return env_action
+
+
+
+
+
+
+
+
+
+
+
 class GamePad:
 
     def __init__(self):
