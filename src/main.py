@@ -22,36 +22,52 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 from network.controller.Policy import DreamerAgent
 from torchvision.transforms.v2 import Compose, ToImage, ToDtype
+from yaml import safe_load
 import gymnasium
 from vizdoom import gymnasium_wrapper
 
 torch.set_float32_matmul_precision('medium')
 def main():
-
-    log_experiment = Path("Experiment")
-    PER4train = AdversarialReplayPriority(50)
-
-    vae_train_loader = DataLoader(DoomDataset("Doom4VAE/train", resize=(240,320)), batch_size=32,     shuffle=True, num_workers=os.cpu_count()-1)
-    vae_valid_loader = DataLoader(DoomDataset("Doom4VAE/validation", resize=(240,320)), batch_size=32, shuffle=False, num_workers=os.cpu_count()-1)
+    with open("config.yaml", "r") as file:
+        config = safe_load(file)
     
-    rssm_train_loader = DataLoader(EpisodicDoomDataset("Doom4RSSM/train", max_length=300, priority_buffer=PER4train, preprocessor=Compose(
-        [ToImage(), ToDtype(dtype=torch.float32, scale=True)]
-    )), batch_size=2, shuffle=True, collate_fn=collate_fn, num_workers=8)
+
+    log_experiment = Path(config["global_config"]["Project_logs"])
+    PER4train = AdversarialReplayPriority(config["PER_config"]["buffer_size"])
+
+    vae_train_loader = DataLoader(DoomDataset(config["vae_config"]["VAE_dataset_path_train"], resize=(config["global_config"]["img_size_h"], config["global_config"]["img_size_l"])), batch_size=config["vae_config"]["train_batch"], shuffle=True, num_workers=os.cpu_count()-1)
+    vae_valid_loader = DataLoader(DoomDataset(config["vae_config"]["VAE_dataset_path_valid"], resize=(config["global_config"]["img_size_h"],config["global_config"]["img_size_l"])), batch_size=config["vae_config"]["train_batch"], shuffle=False, num_workers=os.cpu_count()-1)
+    
+    rssm_train_loader = DataLoader(EpisodicDoomDataset(
+        config["rssm_config"]["rssm_dataset_path_train"], 
+        max_length=config["rssm_config"]["max_episode_length"], 
+        priority_buffer=PER4train, 
+        preprocessor=Compose([ToImage(), ToDtype(dtype=torch.float32, scale=True)])), 
+        batch_size=2, shuffle=True, collate_fn=collate_fn, num_workers=8)
 
     
-    vae_trainer =  Trainer(logger=TensorBoardLogger(log_experiment.joinpath("VAE")), max_epochs=10)
+    vae_trainer =  Trainer(
+        logger=TensorBoardLogger(log_experiment.joinpath("VAE")), 
+        max_epochs=config["vae_config"]["train_epoch"]
+    )
     rssm_trainer = Trainer(
         
                 logger=TensorBoardLogger(log_experiment.joinpath("RSSM")),
                 callbacks=[PERAdapter(PER4train)],
-                max_epochs=5,
-                log_every_n_steps=10)
+                max_epochs=config["rssm_config"]["train_epoch"],
+                log_every_n_steps=10
+    )
     
     
   
   
-    vae_trainer.fit(VAE(latent_dim=128), vae_train_loader, vae_valid_loader)
-    rssm_trainer.fit(Dreamer(action_dim=16, att_dim=6, image_channels=3,vae=vae_trainer.model), rssm_train_loader)
+    vae_trainer.fit(VAE(latent_dim=config["vae_config"]["latent_dim"]), vae_train_loader, vae_valid_loader)
+    rssm_trainer.fit(Dreamer(
+        action_dim=config["global_config"]["action_shape"], 
+        att_dim=config["global_config"]["att_shape"], 
+        image_channels=config["global_config"]["img_channels"],
+        vae=vae_trainer.model
+    ),  rssm_train_loader)
 
     
 if __name__ == '__main__':

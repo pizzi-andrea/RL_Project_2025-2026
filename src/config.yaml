@@ -1,0 +1,31 @@
+PER_config:
+  buffer_size: 500
+global_config:
+  Project_logs: "Project"
+  action_shape: 16
+  att_shape: 6
+  img_channels: 3
+  img_size_h : 240
+  img_size_l : 320
+
+vae_config:
+  VAE_dataset_path_train: "Doom4VAE/train"
+  VAE_dataset_path_valid: "Doom4VAE/validation"
+  train_epoch: 10
+  train_batch: 64
+  latent_dim: 128
+
+rssm_config:
+  rssm_dataset_path_train: "Doom4RSSM/train"
+  rssm_dataset_path_valid: "Doom4RSSM/train"
+  train_epoch: 15
+  train_batch: 4
+  max_episode_length: 50
+
+
+
+policy_config:
+  policy_dataset_path_train: "Doom4RSSM/train"
+  train_epoch: 2
+
+
