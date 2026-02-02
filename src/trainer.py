@@ -8,9 +8,9 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch import no_grad
-from env_info import ATT_PLAYER
+from env_info import ATT_PLAYER, ButtonActionMapper, GamePad
 from priority_functions import CuriosityReplayPriority, CountBasedPriority, AdversarialReplayPriority
-from doomData import DoomDataset, EpisodicDoomDataset, collate_fn
+from doomData import DoomDataset, EpisodicDoomDataset, collate_episodic_fn
 from doomData import Transition, Episode
 from network.encoder.VAE import VAE
 from network.RSSM.rssm import RSSM
@@ -23,6 +23,7 @@ from torch.utils.data import DataLoader
 from network.controller.Policy import DreamerAgent
 from torchvision.transforms.v2 import Compose, ToImage, ToDtype
 import gymnasium
+
 from vizdoom import gymnasium_wrapper
 
 
@@ -84,27 +85,31 @@ class DreamerXP_Trainer(Trainer):
             raise "No dreamer class|weighs"
 
         if isinstance(agent, DreamerAgent):
-            self.dynamic = dreamer
+            self.agent = agent
         elif isinstance(agent, str):
-            self.dynamic = DreamerAgent.load_from_checkpoint(dreamer)
-        elif not agent:
-            self.dynamic = DreamerAgent(self.dynamic, action_space_dim=action_space)
+            self.agent = DreamerAgent.load_from_checkpoint(agent)
+        elif agent is None:
+            self.agent = DreamerAgent(self.dynamic, action_space_dim=action_space)
         else:
-            raise "No all DreamerXP components are initialized"
+            raise ValueError("No all DreamerXP components are initialized")
+
         
         
         
     @no_grad
     def simulate(self, episods:int, buffer:AdversarialReplayPriority, env_id:str):
         
-        env = gymnasium.make(env_id, max_episode_steps=episods, render_mode="rgb_array")
+        env = gymnasium.make(env_id, max_episode_steps=self.max_length, render_mode="rgb_array")
+        mapper = ButtonActionMapper.from_env(env)
+        pad = GamePad()
+
+
         stat_name = [v.name for v in env.unwrapped.game.get_available_game_variables()]
         _player = OrderedDict()
         for s in stat_name:
             _player[s] = None
         ids = len(buffer)
-        policy = self.controller
-        policy.eval()
+        self.agent.eval()
         for e in range(1, episods+1):
             
             game, _ = env.reset()
@@ -112,18 +117,48 @@ class DreamerXP_Trainer(Trainer):
             game_info = game["gamevariables"] 
             done = False
             episode = []
+
+            rssm_state = None
+            action_global = np.zeros(16, dtype=np.float32)
+
             
             
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                # inizializza fuori dal while (vedi punto 3D)
                 while not done:
-                    a = self.agent.forward(s, game_info)
+                    # 1) prepara input per agent: [B=1,T=1,...]
+                    s_t = torch.from_numpy(s).permute(2, 0, 1).float().div(255.0).to(self.agent.device)
+                    s_t = s_t.unsqueeze(0).unsqueeze(0)  # [1,1,3,H,W]
 
-                    # ---------- step ----------
-                    game_next, reward, terminated, truncated, info = env.step(a)
+                    a_t = torch.from_numpy(action_global).float().to(self.agent.device)
+                    a_t = a_t.unsqueeze(0).unsqueeze(0)  # [1,1,16]
+
+                    u_t = torch.ones(1, 1, 6, device=self.agent.device)   # placeholder
+                    m_t = torch.ones(1, 1, device=self.agent.device)      # mask=1
+
+                    # 2) predici azione globale 16 mantenendo rssm_state
+                    act_pred, rssm_state = self.agent.forward(s_t, a_t, u_t, m_t, rssm_state=rssm_state)
+
+                    action_global = act_pred.squeeze(0).squeeze(0).detach().cpu().numpy()
+                    action_global = (action_global > 0.5).astype(np.int32)
+
+                    # 3) mappa 16 globali -> env_action
+                    pad.reset()
+                    for i in range(16):
+                        pad[i] = int(action_global[i])
+                    env_action = mapper.apply_to_env(pad)
+
+                    # 4) step env
+                    game_next, reward, terminated, truncated, info = env.step(env_action)
                     done = terminated or truncated
+
 
                     s_next = game_next["screen"]
                     game_info_next = game_next["gamevariables"]
+
+                    s = s_next
+                    game_info = game_info_next
+
 
                     # ---------- store transition ----------
                     
@@ -137,20 +172,25 @@ class DreamerXP_Trainer(Trainer):
                     dict_diff = {k: 0 for k in att_diff}
                 
                     
-                    ids = torch.tensor(ids)
-                    action  = torch.tensor(a)
-                    reward = torch.tensor(reward)
-                    done = torch.tensor(done, dtype=torch.bool)
-                    
-                    
-                    next_ids = torch.tensor(ids + 1)
-                    
-                    _user_att = torch.from_numpy([ v for v in (dict_diff | _player).values()])
-                    Image.fromarray(s_next).save(tmp_file.name)
-                    episode.append(Transition(ids, tmp_file.name, action, reward, next_ids, done, _user_att))
-                    ids +=1
+                    ids_t = torch.tensor(ids)
+                    next_ids_t = torch.tensor(ids + 1)
+
+                    action_t = torch.tensor(action_global, dtype=torch.int32)
+                    reward_t = torch.tensor(reward, dtype=torch.float32)
+                    done_t = torch.tensor(done, dtype=torch.bool)
+
+                    _user_att = torch.from_numpy(np.array([v for v in (dict_diff | _player).values()], dtype=np.float32))
+
+                    img_path = tmp_file.name.replace(".png", f"_{ids}.png")
+                    Image.fromarray(s_next).save(img_path)
+                    episode.append(Transition(ids_t, img_path, action_t, reward_t, next_ids_t, done_t, _user_att))
+
+
+                    ids += 1
+
             
             buffer.store(Episode(episode, max_length=self.max_length))
+        env.close()    
 
 
 
