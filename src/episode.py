@@ -4,6 +4,8 @@ import numpy as np
 
 from functools import total_ordering
 
+import torch
+
 @total_ordering
 class Transition:
     def __init__(self, idx:Tensor, o_t:str, a:Tensor, r:Tensor, idx_n:Tensor, d:Tensor, player_state:Tensor):
@@ -22,23 +24,53 @@ class Transition:
         return  self.idx < value.idx
 
 class Episode:
-    def __init__(self, transition:list[Transition], max_length:int, short:bool=True):
+    def __init__(self, transition: list["Transition"], max_length: int, short: bool = True):
         if short:
             transition.sort()
         
-        self._data = list(transition[:max_length])
-    
+        transitions = transition[:max_length]
+        n = len(transitions)
+        
+        if n == 0:
+            return
+
+        device = torch.device("cpu") 
+
+        self.idx_data = torch.zeros(n, dtype=torch.int16, device=device)
+        self.idx_n_data = torch.zeros(n, dtype=torch.int16, device=device)
+        self.reward_data = torch.zeros(n, dtype=torch.float32, device=device)
+        self.done_data = torch.zeros(n, dtype=torch.bool, device=device)
+        
+        action_shape = transitions[0].action.shape
+        p_state_shape = transitions[0].player_state.shape
+        
+        self.action_data = torch.zeros((n, *action_shape), dtype=torch.float32, device=device)
+        self.player_state_data = torch.zeros((n, *p_state_shape), dtype=torch.float32, device=device)
+        
+        self.o_t_data = [None] * n
+
+        for i, t in enumerate(transitions):
+            self.idx_data[i] = t.idx
+            self.idx_n_data[i] = t.idx_n
+            self.reward_data[i] = t.reward
+            self.done_data[i] = t.done
+            self.action_data[i] = t.action
+            self.player_state_data[i] = t.player_state
+            self.o_t_data[i] = t.o_t
+
     def __getitem__(self, idx):
-        return self._data[idx]
+        return Transition(
+            self.idx_data[idx], 
+            self.o_t_data[idx], 
+            self.action_data[idx], 
+            self.reward_data[idx], 
+            self.idx_n_data[idx], 
+            self.done_data[idx], 
+            self.player_state_data[idx]
+        )
     
     def __len__(self):
-        return len(self._data)
-
-    def add_transition(self, trasition:Transition) -> None:
-        self._data.append(trasition)
-    
-    def remove_transition(self) -> Transition:
-        return self._data.popleft()
+        return self.idx_data.shape[0]
     
 
 

@@ -123,7 +123,7 @@ class Dreamer(L.LightningModule):
         # se vuoi che enc_x sia esattamente latent_dim del VAE, imposta enc_dim=vae_latent_dim
     ):
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=['vae'])
 
         # RSSM (embed_dim deve matchare la dimensione di enc_x)
         # Se usi VAE, il modo più semplice è enc_dim == vae_latent_dim

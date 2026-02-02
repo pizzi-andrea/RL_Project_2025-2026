@@ -2,8 +2,8 @@ import os
 import numpy as np
 import torch
 import pandas as pd
-
 from torch.nn.utils.rnn import pad_sequence
+import torch
 from PIL import Image
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
@@ -113,8 +113,7 @@ class EpisodicDoomDataset(Dataset):
         }
         
 
-from torch.nn.utils.rnn import pad_sequence
-import torch
+
 
 def collate_fn(batch):
  

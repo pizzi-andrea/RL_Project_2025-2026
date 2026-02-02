@@ -166,8 +166,9 @@ class RSSM(nn.Module): # need specific train loop
         emb_action = self.action_embed(action)
         emb_latent = self.z_embed(state.z)
         # -- 
-       
+        
         #print(f"DEBUG: emb_action shape {emb_action.shape}, emb_latent shape {emb_latent.shape}")
+        #exit()
         x = torch.cat([emb_action, emb_latent], dim=-1)
         
         

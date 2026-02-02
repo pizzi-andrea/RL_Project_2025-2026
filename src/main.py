@@ -1,30 +1,26 @@
 import argparse
 import os
-from trainer import VAE_Trainer, DreamerXP_Trainer
-from network.encoder.VAE import VAE
-from priority_functions import AdversarialReplayPriority
 from pathlib import Path
-from lightning import Trainer
+
+import gymnasium
 import numpy as np
 import torch
-from torch import no_grad
-from env_info import ATT_PLAYER
-from priority_functions import CuriosityReplayPriority, CountBasedPriority, AdversarialReplayPriority
-from doomData import DoomDataset, EpisodicDoomDataset, collate_fn
-from doomData import Transition, Episode
-from network.encoder.VAE import VAE
-from network.RSSM.rssm import RSSM
-from network.world.Dreamer import Dreamer, PERAdapter
-from network.controller.Policy import Policy
-from lightning.pytorch.loggers import TensorBoardLogger
-from lightning import Trainer as LTrainer
+from lightning import Trainer
 from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
-from network.controller.Policy import DreamerAgent
-from torchvision.transforms.v2 import Compose, ToImage, ToDtype
+from torchvision.transforms.v2 import Compose, ToDtype, ToImage
 from yaml import safe_load
-import gymnasium
 from vizdoom import gymnasium_wrapper
+
+from doomData import DoomDataset, EpisodicDoomDataset, collate_fn
+from network.controller.Policy import DreamerAgent
+from network.encoder.VAE import VAE
+from network.world.Dreamer import Dreamer, PERAdapter
+from priority_functions import (
+    AdversarialReplayPriority,
+    CountBasedPriority,
+    CuriosityReplayPriority,
+)
 
 torch.set_float32_matmul_precision('medium')
 def main():
@@ -43,7 +39,23 @@ def main():
         max_length=config["rssm_config"]["max_episode_length"], 
         priority_buffer=PER4train, 
         preprocessor=Compose([ToImage(), ToDtype(dtype=torch.float32, scale=True)])), 
-        batch_size=2, shuffle=True, collate_fn=collate_fn, num_workers=8)
+        batch_size=config["rssm_config"]["train_batch"], shuffle=True, collate_fn=collate_fn, num_workers=8)
+    
+    policy_train_loader = DataLoader(EpisodicDoomDataset(
+        config["policy_config"]["policy_dataset_path_train"], 
+        max_length=config["policy_config"]["burn_in"], 
+        priority_buffer=PER4train, 
+        preprocessor=Compose([ToImage(), ToDtype(dtype=torch.float32, scale=True)])), 
+        batch_size=config["policy_config"]["train_batch"] , shuffle=True, collate_fn=collate_fn, num_workers=8)
+    
+    policy_valid_loader = DataLoader(EpisodicDoomDataset(
+        config["policy_config"]["policy_dataset_path_train"], 
+        max_length=config["policy_config"]["burn_in"], 
+        priority_buffer=PER4train, 
+        preprocessor=Compose([ToImage(), ToDtype(dtype=torch.float32, scale=True)])), 
+        batch_size=1, shuffle=False, collate_fn=collate_fn, num_workers=8)
+    
+
 
     
     vae_trainer =  Trainer(
@@ -57,10 +69,16 @@ def main():
                 max_epochs=config["rssm_config"]["train_epoch"],
                 log_every_n_steps=10
     )
+
+    policy_trainer = Trainer(
+        logger=TensorBoardLogger(log_experiment.joinpath("Policy")),
+        max_epochs=config["policy_config"]["train_epoch"],
+        log_every_n_steps=50
+    )
     
     
   
-  
+    
     vae_trainer.fit(VAE(latent_dim=config["vae_config"]["latent_dim"]), vae_train_loader, vae_valid_loader)
     rssm_trainer.fit(Dreamer(
         action_dim=config["global_config"]["action_shape"], 
@@ -68,6 +86,19 @@ def main():
         image_channels=config["global_config"]["img_channels"],
         vae=vae_trainer.model
     ),  rssm_train_loader)
+    
+    policy_trainer.fit(
+        DreamerAgent(
+            rssm_trainer.model, 
+            action_space_dim=config["global_config"]["action_shape"],
+            horizont=config["policy_config"]["horizont"],
+            burn_in=config["policy_config"]["burn_in"]
+            ),
+            train_dataloaders=policy_train_loader,
+            val_dataloaders=policy_valid_loader
+    )
+
+    
 
     
 if __name__ == '__main__':

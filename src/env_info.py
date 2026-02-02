@@ -16,6 +16,8 @@ GLOBAL_BUTTONS = [
 from dataclasses import dataclass
 from typing import Dict, List
 
+import numpy as np
+
 @dataclass
 class ButtonActionMapper:
     """
@@ -76,7 +78,7 @@ class ButtonActionMapper:
                 continue
             env_action[env_idx] = int(gamepad[g_idx])
 
-        return env_action
+        return np.array(env_action, dtype=np.int8)
 
 
 
