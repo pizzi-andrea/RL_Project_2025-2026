@@ -9,6 +9,8 @@ from ..world.Dreamer import Dreamer
 import gymnasium
 from PIL import Image
 from torchvision.transforms.functional import to_tensor
+from env_info import ButtonActionMapper, GamePad
+
 from vizdoom import gymnasium_wrapper
 
 class Policy(nn.Module):
@@ -47,7 +49,7 @@ class Policy(nn.Module):
 
 
 class DreamerAgent(L.LightningModule):
-    def __init__(self, dreamer_model:Dreamer|str, action_space_dim:int, entropy_coef:int=0.0003,horizont:int=15, burn_in:int=10):
+    def __init__(self, dreamer_model:Dreamer|str, action_space_dim:int=16, entropy_coef:int=0.0003,horizont:int=15, burn_in:int=10):
         super().__init__()
         self.save_hyperparameters()
         # import dreamer model or weigths
@@ -57,10 +59,12 @@ class DreamerAgent(L.LightningModule):
             self.dreamer_model = dreamer_model
         
         # obtain RSSM model
-        self.rssm = dreamer_model.rssm
+        self.rssm = self.dreamer_model.rssm
         self.entropy_coef = entropy_coef
         
         self.validation_env = gymnasium.make("VizdoomBasic-v0", render_mode="human")
+        self.val_mapper = ButtonActionMapper.from_env(self.validation_env)
+        self._val_pad = GamePad()
         self.emb_dim = self.rssm.deter_dim + (self.rssm.L*self.rssm.K)
         self.action_space_dim = action_space_dim
         self.horizont = horizont
@@ -148,36 +152,50 @@ class DreamerAgent(L.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        return 0
         game, _ = self.validation_env.reset()
-        s, user_att = game["screen"], game["gamevariables"]
-        action = np.zeros(16, dtype=np.float32)
-        mean_rewards = []
+        s = game["screen"]
         done = False
-        rssm_state = None 
-    
-        
-        
-        while not done:
-            s_t = to_tensor(s).to(self.device).unsqueeze(0).unsqueeze(0)
-            # unsqueeze(0) due volte per ottenere [B=1, T=1, ...]
-            a_t = torch.from_numpy(action).float().unsqueeze(0).unsqueeze(0).to(self.device)
-            u_t = torch.from_numpy(np.ones(shape=6)).float().unsqueeze(0).unsqueeze(0).to(self.device)
-            print(u_t)
-            out, rssm_state = self(s_t, a_t, u_t, rssm_state)
-            
-            # Rimuovi B e T per l'ambiente
-            action = out.squeeze(0).squeeze(0).cpu().numpy()
-            
-            game, reward, term, trunc, _ = self.validation_env.step(action)
-            s, user_att = game["screen"], game["gamevariables"]
-            mean_rewards.append(reward)
-            done = term or trunc
-        
-        self.log("val_reward", np.mean(mean_rewards), prog_bar=True)
-        return np.mean(mean_rewards)
+        rssm_state = None
 
-    def forward(self, obs, action, user_att, mask=None):
+        # azione iniziale (tutti zeri)
+        action = np.zeros(self.action_space_dim, dtype=np.float32)
+
+        rewards = []
+
+        while not done:
+            s_t = to_tensor(s).to(self.device).unsqueeze(0).unsqueeze(0)   # [1,1,C,H,W]
+            a_t = torch.from_numpy(action).float().to(self.device).unsqueeze(0).unsqueeze(0)  # [1,1,A]
+
+            # user_att: qui stiamo usando ones, ma sarebbe meglio prendere gamevariables reali e preprocessarli
+            u_t = torch.ones(1, 1, 6, device=self.device)
+
+            m_t = torch.ones(1, 1, device=self.device)  # mask = 1 (step valido)
+
+            act_pred, rssm_state = self.forward(s_t, a_t, u_t, m_t, rssm_state=rssm_state)
+            action = act_pred.squeeze(0).squeeze(0).detach().cpu().numpy()  # [A]
+
+            # VizDoom vuole spesso int/0-1; se serve:
+            action = (action > 0.5).astype(np.int32)
+
+            # reset pad e scrivi i 16 globali
+            self._val_pad.reset()
+            for i in range(min(self.action_space_dim, 16)):
+                self._val_pad[i] = int(action[i])
+
+            # mappa 16 -> env_buttons
+            env_action = self.val_mapper.apply_to_env(self._val_pad)
+
+            game, r, term, trunc, _ = self.validation_env.step(env_action)
+
+            s = game["screen"]
+            rewards.append(r)
+            done = term or trunc
+
+        self.log("val_reward", float(np.mean(rewards)), prog_bar=True)
+        return float(np.mean(rewards))
+ 
+
+    def forward(self, obs, action, user_att, mask=None, rssm_state=None):
         
         B, T, C, H, W = obs.shape
         # -- encode attribute player with obs
@@ -186,7 +204,9 @@ class DreamerAgent(L.LightningModule):
         enc = self.dreamer_model.encode(obs, user_att)
 
         # -- store temporal informations
-        rssm_state = self.rssm.init_state(B, obs.device)
+        if rssm_state is None:
+            rssm_state = self.rssm.init_state(B, obs.device)
+
         
         reward = []
         continues = []
@@ -254,17 +274,21 @@ class DreamerAgent(L.LightningModule):
 
         else:
             actions = []
+
             for t in range(T):
                 a_t = action[:, t]
-                x_t = enc[:, t]  # enc_x
-                rssm_state, _ = self.rssm.observe_step(rssm_state, a_t, x_t, mask)
+                x_t = enc[:, t]
+                m_t = mask[:, t] if mask is not None else None
+
+                rssm_state, _ = self.rssm.observe_step(rssm_state, a_t, x_t, m_t)
                 embed = torch.cat([rssm_state.h, rssm_state.z], dim=-1)
+
                 action_logits = self.policy(embed)
                 dist = torch.distributions.Bernoulli(logits=action_logits)
-                action_pred = dist.sample()
+                action_pred = dist.sample()   # [B, action_dim]
                 actions.append(action_pred)
-            
-            actions = torch.stack(actions, dim=1)
+
+            actions = torch.stack(actions, dim=1)  # [B,T,A]
             return actions, rssm_state
 
 
