@@ -8,18 +8,19 @@ global_config:
   img_channels: 3
   img_size_h : 240
   img_size_l : 320
+  dreamer_iterations: 5
 
 vae_config:
   VAE_dataset_path_train: "Doom4VAE/train"
   VAE_dataset_path_valid: "Doom4VAE/validation"
-  train_epoch: 0
+  train_epoch: 25
   train_batch: 64
   latent_dim: 128
 
 rssm_config:
   rssm_dataset_path_train: "Doom4RSSM/train"
   rssm_dataset_path_valid: "Doom4RSSM/validation"
-  train_epoch: 10
+  train_epoch: 5
   train_batch: 4
   max_episode_length: 50
 

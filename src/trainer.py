@@ -13,7 +13,7 @@ from priority_functions import CuriosityReplayPriority, CountBasedPriority, Adve
 from doomData import DoomDataset, EpisodicDoomDataset, collate_episodic_fn
 from doomData import Transition, Episode
 from network.encoder.VAE import VAE
-from network.RSSM.rssm import RSSM
+from network.dreamer.rssm import RSSM
 from network.world.Dreamer import Dreamer, PERAdapter
 from network.controller.Policy import Policy
 from lightning.pytorch.loggers import TensorBoardLogger

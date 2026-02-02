@@ -14,7 +14,7 @@ from ..encoder.VAE import VAE
 from ..encoder.convEncoder import ConvEncoder, ConvDecoder
 
 # RNN network
-from ..RSSM.rssm import RSSM
+from ..dreamer.rssm import RSSM
 
 from .utils import cat_kl_logits
 # -------------------------

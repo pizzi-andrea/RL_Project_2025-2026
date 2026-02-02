@@ -80,23 +80,26 @@ def main():
   
     
     vae_trainer.fit(VAE(latent_dim=config["vae_config"]["latent_dim"]), vae_train_loader, vae_valid_loader)
-    rssm_trainer.fit(Dreamer(
-        action_dim=config["global_config"]["action_shape"], 
-        att_dim=config["global_config"]["att_shape"], 
-        image_channels=config["global_config"]["img_channels"],
-        vae=vae_trainer.model
-    ),  rssm_train_loader)
     
-    policy_trainer.fit(
-        DreamerAgent(
-            rssm_trainer.model, 
-            action_space_dim=config["global_config"]["action_shape"],
-            horizont=config["policy_config"]["horizont"],
-            burn_in=config["policy_config"]["burn_in"]
-            ),
-            train_dataloaders=policy_train_loader,
-            val_dataloaders=policy_valid_loader
-    )
+    for epoch in range(1, config["global_config"]["dreamer_iterations"]):
+        print(f"Global iteration ({epoch})")
+        rssm_trainer.fit(Dreamer(
+            action_dim=config["global_config"]["action_shape"], 
+            att_dim=config["global_config"]["att_shape"], 
+            image_channels=config["global_config"]["img_channels"],
+            vae=vae_trainer.model
+        ),  rssm_train_loader)
+        
+        policy_trainer.fit(
+            DreamerAgent(
+                rssm_trainer.model, 
+                action_space_dim=config["global_config"]["action_shape"],
+                horizont=config["policy_config"]["horizont"],
+                burn_in=config["policy_config"]["burn_in"]
+                ),
+                train_dataloaders=policy_train_loader,
+                val_dataloaders=policy_valid_loader
+        )
 
     
 
