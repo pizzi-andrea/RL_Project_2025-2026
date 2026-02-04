@@ -21,6 +21,7 @@ from priority_functions import (
     CountBasedPriority,
     CuriosityReplayPriority,
 )
+from imaginated_rollout import save_imagined_trajectory
 
 torch.set_float32_matmul_precision('medium')
 def main():
@@ -100,6 +101,16 @@ def main():
                 train_dataloaders=policy_train_loader,
                 val_dataloaders=policy_valid_loader
         )
+        save_imagined_trajectory(
+            env_id="VizdoomBasic-v0",
+            agent=policy_trainer.model.to(policy_trainer.model.device),
+            out_dir=str(log_experiment.joinpath("Policy", "imagination")),
+            burn_in_steps=config["policy_config"]["burn_in"],
+            imagine_horizon=config["policy_config"]["horizont"],
+            seed=0,
+            tag=epoch,
+        )
+
 
     
 

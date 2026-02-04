@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Dict, List
 
 import numpy as np
+import torch
 
 @dataclass
 class ButtonActionMapper:
@@ -137,3 +138,23 @@ if __name__ == "__main__":
     print(pad[5])
     pad.reset()
     print(pad)
+
+
+def build_user_att_from_env(env, gamevariables: np.ndarray, device=None) -> torch.Tensor:
+    """
+    Costruisce un vettore [len(ATT_PLAYER_NAME)] nello stesso ordine di ATT_PLAYER_NAME,
+    usando solo le variabili che l'env espone. Le mancanti restano a 0.
+    """
+    names = [v.name for v in env.unwrapped.game.get_available_game_variables()]
+    name_to_idx = {n: i for i, n in enumerate(names)}
+
+    att = np.zeros(len(ATT_PLAYER_NAME), dtype=np.float32)
+    for j, att_name in enumerate(ATT_PLAYER_NAME):
+        i = name_to_idx.get(att_name, None)
+        if i is not None and i < len(gamevariables):
+            att[j] = float(gamevariables[i])
+
+    t = torch.from_numpy(att)
+    if device is not None:
+        t = t.to(device)
+    return t
