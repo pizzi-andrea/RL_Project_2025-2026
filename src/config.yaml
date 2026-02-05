@@ -1,36 +1,46 @@
 PER_config:
-  buffer_size: 500
+  buffer_size: 500000 # 100.000 almeno
+  
   
 global_config:
   Project_logs: "Project"
   action_shape: 16
   att_shape: 6
   img_channels: 3
-  img_size_h : 240
-  img_size_l : 320
-  dreamer_iterations: 5
+  img_size_h : 120
+  img_size_l : 160
+  dreamer_iterations: 20
+  vae_w: "weights/vae.ckpt"
+  dreamer_w: "weights/rssm.ckpt"
+  policy_w : "weights/policy.ckpt"
 
 vae_config:
-  VAE_dataset_path_train: "Doom4VAE/train"
-  VAE_dataset_path_valid: "Doom4VAE/validation"
-  train_epoch: 25
+  VAE_dataset_path_train: "Doom4VAE/train" #funny/train
+  VAE_dataset_path_valid: "Doom4VAE/validation" #funny/valid
+  train_epoch: 25 #25
   train_batch: 64
   latent_dim: 128
 
 rssm_config:
-  rssm_dataset_path_train: "Doom4RSSM/train"
-  rssm_dataset_path_valid: "Doom4RSSM/validation"
-  train_epoch: 5
-  train_batch: 4
-  max_episode_length: 50
+  rssm_dataset_path_train: "Doom4RSSM/train" #funny/train
+  rssm_dataset_path_valid: "Doom4RSSM/validation" #funny/train
+  train_epoch: 25
+  train_batch: 8
+  max_episode_length: 60
+  beta_dyn: 0.5
+  beta_pred: 0.4
+  beta_rep: 0.1
+  lr: 0.001
+
 
 
 
 policy_config:
-  policy_dataset_path_train: "Doom4RSSM/validation"
-  train_epoch: 10
-  horizont: 15
-  burn_in: 10
-  train_batch: 16 
+  policy_dataset_path_train: "Doom4RSSM/validation" #funny/train
+  train_epoch: 10 
+  horizont: 30
+  burn_in: 3
+  train_batch: 16
+  lr: 0.001
 
 

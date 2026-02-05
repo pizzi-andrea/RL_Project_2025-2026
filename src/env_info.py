@@ -1,4 +1,7 @@
 
+from dataclasses import dataclass
+from typing import Dict, List
+import numpy as np
 
 ATT_PLAYER_NAME = ["HEALTH", "AMMO2","SELECTED_WEAPON","SELECTED_WEAPON_AMMO","KILLCOUNT", "ARMOR"]
 
@@ -13,10 +16,7 @@ GLOBAL_BUTTONS = [
     "RELOAD", "ZOOM",
 ] #actions corresponding to the global buttons with the same order
 
-from dataclasses import dataclass
-from typing import Dict, List
 
-import numpy as np
 
 @dataclass
 class ButtonActionMapper:

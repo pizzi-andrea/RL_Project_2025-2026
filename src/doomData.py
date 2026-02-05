@@ -10,8 +10,8 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms.v2 import Compose, Resize, ToImage, ToDtype
 from tqdm import tqdm
 from episode import Episode, Transition
-from priority_functions import PriorityExperienceReplay
 from env_info import ATT_PLAYER_NAME
+from priority_functions import PriorityExperienceReplay
 
 class DoomDataset (Dataset):
     """Simple dataset implementation for VAE pre-training"""
@@ -112,9 +112,6 @@ class EpisodicDoomDataset(Dataset):
             "priority_idx": torch.tensor(p_idx, requires_grad=False),
         }
         
-
-
-
 def collate_fn(batch):
  
     batch_obs = [b["obs"] for b in batch]

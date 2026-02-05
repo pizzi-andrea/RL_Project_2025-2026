@@ -10,11 +10,12 @@ class SumTree:
         self.priority = np.zeros((2*size)-1, dtype=np.float32)
         self.buffer = np.ndarray(shape=size, dtype=np.object_)
         self.buffer_idx = 0
+        self.capacity = self.size
         
     
     def __len__(self) -> int:
-        """size of buffer"""
-        return self.size
+        """data_store in the buffer"""
+        return self.size - self.capacity
 
     def get_dx(self, parent:int) -> int:
         """Get the right leaf of the parent node if it exists, otherwise return None"""
@@ -56,6 +57,7 @@ class SumTree:
         self.priority[tree_idx] = priority
         self._update(tree_idx)
         self.buffer_idx = (self.buffer_idx + 1)%len(self.buffer)
+        self.capacity = max(0, self.capacity - 1)
         return
         
 
@@ -91,7 +93,7 @@ class SumTree:
     
     def free_space(self) -> int:
         """Return free space in buffer"""
-        return (self.buffer_idx + 1)
+        return self.capacity
 
     def get_transition(self, sum:float) -> tuple[Episode, int, int]:
         

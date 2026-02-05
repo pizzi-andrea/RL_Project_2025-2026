@@ -21,6 +21,7 @@ dependencies: # conda dependences
     - torchvision
     - lightning
     - tqdm
+    - opencv-python
 
 
     

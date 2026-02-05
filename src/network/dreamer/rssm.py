@@ -9,8 +9,6 @@ import torch.nn as nn
 
 from .utils import unimix_probs, st_onehot_from_logits
 
-
-
 # -------------------------
 # RSSM (discrete latent)
 # -------------------------
@@ -33,9 +31,11 @@ class RSSM(nn.Module): # need specific train loop
         self,
         action_dim: int=16,
         deter_dim: int = 1024, # deterministic hidden state dimension
+        obs_dim:int = 1024,
         stoch_latents: int = 32,   # L (number of discrete latent variables)
         stoch_classes: int = 32,   # K (number of classes per latent variable)
         embed_dim: int = 1024,
+        gru_projection_dim: int = 1024,
         unimix: float = 0.01,
     ):
         """
@@ -61,22 +61,39 @@ class RSSM(nn.Module): # need specific train loop
         self.K = stoch_classes
         self.unimix = unimix
         self.output_dimension = self.L*self.K
+        self.gru_input_proj_dim = gru_projection_dim
 
-        self.action_embed = nn.Sequential(nn.Linear(action_dim, embed_dim), nn.SiLU())
-        self.z_embed = nn.Sequential(nn.Linear(self.output_dimension, embed_dim), nn.SiLU()) #so that action and z have same dimension that is not too smal
+        self.action_embed = nn.Sequential(
+            nn.Linear(action_dim, embed_dim),
+            nn.LayerNorm(embed_dim), # <---
+            nn.SiLU()
+        )
+        self.z_embed = nn.Sequential(
+            nn.Linear(self.output_dimension, embed_dim),
+            nn.LayerNorm(embed_dim), # 
+            nn.SiLU()
+        )
 
-        self.gru = nn.GRU(input_size=2 * embed_dim, hidden_size=deter_dim, batch_first=True) #Batch, seq, feature
+        self.gru_input_proj = nn.Sequential(
+            nn.Linear(2*embed_dim, gru_projection_dim),
+            nn.LayerNorm(gru_projection_dim), # 
+            nn.SiLU()
+        )
+
+        self.gru = nn.GRUCell(input_size=gru_projection_dim, hidden_size=deter_dim) #Batch, seq, feature
 
         # prior logits memory 
         self.prior_net = nn.Sequential( # self.prior_net(h) -> logits of z
 
             nn.Linear(deter_dim, deter_dim),
+            nn.LayerNorm(deter_dim),
             nn.SiLU(),
             nn.Linear(deter_dim, self.L * self.K),
         )
         # posterior logits observation + memory
         self.post_net = nn.Sequential(
             nn.Linear(deter_dim + embed_dim, deter_dim),
+            nn.LayerNorm(deter_dim),
             nn.SiLU(),
             nn.Linear(deter_dim, self.output_dimension),
         )
@@ -101,38 +118,36 @@ class RSSM(nn.Module): # need specific train loop
         return z_flat, logits
     
     def _gru_step(self, prev_h: torch.Tensor, inp_bt: torch.Tensor) -> torch.Tensor:
-        # prev_h: [B,H]
-        # inp_bt: [B, 2*embed_dim]
-        x = inp_bt.unsqueeze(1)  # [B,1,2*embed_dim] for GRU
-        h0 = prev_h.unsqueeze(0)  # [1,B,H] for GRU
-        _, h_last = self.gru(x, h0)  # h_last: [1,B,H]
-        return h_last.squeeze(0)  # [B,H]
+        return self.gru(inp_bt, prev_h)
     
-    def imagine_step(self, state: RSSMState, action: torch.Tensor, mask_t: Optional[torch.Tensor]= None) -> RSSMState: # [B] 1=valid 0=pad
-        """Predict next state using the 'immagination' mechanism, no input obs are required and return network state"""
+    def imagine_step(self, state: RSSMState, action: torch.Tensor, mask_t: Optional[torch.Tensor]= None) -> Tuple[RSSMState, torch.Tensor]:
+        """Predict next state using the 'imagination' mechanism."""
         
         aemb = self.action_embed(action)
         zemb = self.z_embed(state.z)
         x = torch.cat([aemb, zemb], dim=-1)
-
-        state_next, prior_logits = self.compute_prior(state, x)
         
-        z_new, prior_logits = self._logits_to_st_z(prior_logits)
+        state_next_h, prior_logits_pure = self.compute_prior(state, x)        
+        z_new_flat, _ = self._logits_to_st_z(prior_logits_pure)
 
-        return self.apply_mask(state_next, z_new, state, prior_logits, prior_logits, mask_t)
-
+        
+        return self.apply_mask(state_next_h, z_new_flat, state, prior_logits_pure, prior_logits_pure, mask_t)
+    
     def apply_mask(self, h_new, z_new, prev, post_logits, prior_logits, mask=None):
-        """Masck padding frame and return masked RSSM state"""
-        #print(h_new.shape)
-        #print(z_new.shape)
-        #print(mask.shape)
-        #exit()
+        """
+        """
         if mask is not None:
             m = mask.float().unsqueeze(dim=-1)
-            h = m * h_new + (1 - m) * prev.h
-            z = m * z_new + (1 - m) * prev.z
+            
+           
+            h = m * h_new 
+            z = m * z_new
+            
             m3 = mask.float().view(-1, 1, 1)
-            z_logits = m3 * post_logits + (1 - m3) * prev.z_logits
+            
+            z_logits = m3 * post_logits + (1 - m3) * prev.z_logits 
+            
+            #
             state = RSSMState(h=h, z=z, z_logits=z_logits)
         else:
             state = RSSMState(h=h_new, z=z_new, z_logits=post_logits)
@@ -140,7 +155,7 @@ class RSSM(nn.Module): # need specific train loop
         return state, prior_logits
 
     def compute_prior(self, hidden_state, x):
-
+        x = self.gru_input_proj(x)
         state_next = self._gru_step(hidden_state.h, x)
         prior_logits = self.prior_net(state_next).view(-1, self.L, self.K)
 

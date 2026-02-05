@@ -1,13 +1,10 @@
-from PIL import Image
-from torch import Tensor
-import numpy as np
-
-from functools import total_ordering
-
 import torch
+from torch import Tensor
+from functools import total_ordering
 
 @total_ordering
 class Transition:
+    """Single transition state - action - user_att"""
     def __init__(self, idx:Tensor, o_t:str, a:Tensor, r:Tensor, idx_n:Tensor, d:Tensor, player_state:Tensor):
         self.idx = idx
         self.idx_n = idx_n
