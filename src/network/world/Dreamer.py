@@ -251,10 +251,18 @@ class Dreamer(L.LightningModule):
         }
 
         return loss, components, loss_t
+    
+    def setup(self, stage):
+        self.unfreeze()
+    
     def freeze_model(self):
         for p in self.parameters():
             p.requires_grad = False
 
+    def unfreeze_model(self):
+        for p in self.parameters():
+            p.requires_grad = False
+    
     def configure_optimizers(self):
         
         return torch.optim.AdamW(self.parameters(), self.hparams.lr)

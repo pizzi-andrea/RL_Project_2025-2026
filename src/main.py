@@ -27,7 +27,7 @@ def main():
     cmd = argparse.ArgumentParser()
     cmd.add_argument("--load_weights", action="store_true", required=False, help="load weights from src/weights directory")
     args = cmd.parse_args()
-
+    
     with open("config.yaml", "r") as file:
         config = safe_load(file)
     
@@ -53,12 +53,12 @@ def main():
         batch_size=config["policy_config"]["train_batch"] , shuffle=True, collate_fn=collate_fn, num_workers=os.cpu_count()-1)
 
     vae_trainer =  Trainer(
-        logger=TensorBoardLogger(log_experiment.joinpath("VAE")), 
+        logger=TensorBoardLogger(log_experiment, name="VAE"), 
         max_epochs=config["vae_config"]["train_epoch"]
     )
     rssm_trainer = Trainer(
         
-                logger=TensorBoardLogger(log_experiment.joinpath("RSSM")),
+                logger=TensorBoardLogger(log_experiment, name="RSSM"),
                 callbacks=[PERAdapter(PER4train)],
                 max_epochs=config["rssm_config"]["train_epoch"],
                 log_every_n_steps=50,
@@ -66,11 +66,12 @@ def main():
     )
 
     policy_trainer = Trainer(
-        logger=TensorBoardLogger(log_experiment.joinpath("Policy")),
+        logger=TensorBoardLogger(log_experiment, name="Policy"),
         max_epochs=config["policy_config"]["train_epoch"],
         log_every_n_steps=50,
         
     )
+    
     
     if args.load_weights and Path(config["global_config"]["vae_w"]).exists():
         print(f"found VAE weights in {config["global_config"]["vae_w"]}")
@@ -115,12 +116,15 @@ def main():
     for epoch in range(1, config["global_config"]["dreamer_iterations"]):
         print(f"Global iteration ({epoch})")
         
+        rssm_trainer.fit_loop.max_epochs = epoch * config["rssm_config"]["train_epoch"]
         rssm_trainer.fit(rssm_model, train_dataloaders=rssm_train_loader, val_dataloaders=rssm_train_loader)
         
+        policy_trainer.fit_loop.max_epochs = epoch * config["policy_config"]["train_epoch"]
         policy_trainer.fit(agent_model,
                 train_dataloaders=policy_train_loader,
                 
         )
+        
 
     
 
