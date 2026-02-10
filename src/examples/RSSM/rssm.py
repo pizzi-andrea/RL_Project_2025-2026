@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Tuple
-from .utils import unimix_probs, st_onehot_from_logits
+from .utils import *
 
 import torch
 import torch.nn as nn
@@ -65,16 +65,7 @@ class RSSM(nn.Module): # need specific train loop
         z = torch.zeros(batch_size, self.L * self.K, device=device)
         return RSSMState(h=h, z=z, z_logits=z_logits)
 
-    def _logits_to_st_z(self, logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]: #conversion logit-> discrete z
-        # logits: [B,L*K] -> [B,L,K]
-        logits = logits.view(-1, self.L, self.K)
-        probs = torch.softmax(logits, dim=-1) #softmax to obtain a probability
-        probs = unimix_probs(probs, unimix=self.unimix) #unimix that adds some uniform noise
-        # incorporate unimix back into logits (stable)
-        logits = torch.log(probs.clamp_min(1e-8)) # stable logits after unimix
-        z_st = st_onehot_from_logits(logits)  # [B,L,K] z discrete but derivable
-        z_flat = z_st.view(-1, self.L * self.K)
-        return z_flat, logits
+    
 
     def imagine_step(self, prev: RSSMState, action: torch.Tensor) -> RSSMState:
         # action: [B,A] one-hot or continuous vector
@@ -84,7 +75,7 @@ class RSSM(nn.Module): # need specific train loop
         h = self.gru(inp, prev.h)
 
         prior_logits = self.prior_net(h)
-        z, prior_logits = self._logits_to_st_z(prior_logits)
+        z, prior_logits =  logits_to (prior_logits)
         return RSSMState(h=h, z=z, z_logits=prior_logits)
 
     def observe_step(self, prev: RSSMState, action: torch.Tensor, enc_x: torch.Tensor) -> Tuple[RSSMState, torch.Tensor]: #it's like imagine step but with posterior (enc_x is the encoded observation)

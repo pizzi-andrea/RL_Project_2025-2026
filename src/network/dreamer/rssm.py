@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
-from .utils import unimix_probs, st_onehot_from_logits
+from .utils import *
 
 # -------------------------
 # RSSM (discrete latent)
@@ -106,16 +106,6 @@ class RSSM(nn.Module): # need specific train loop
         z = torch.zeros(batch_size, self.L * self.K, device=device)
         return RSSMState(h=h, z=z, z_logits=z_logits)
 
-    def _logits_to_st_z(self, logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]: #conversion logit-> discrete z
-        # logits: [B,L*K] -> [B,L,K]
-        logits = logits.view(-1, self.L, self.K)
-        probs = torch.softmax(logits, dim=-1) #softmax to obtain a probability
-        probs = unimix_probs(probs, unimix=self.unimix) #unimix that adds some uniform noise
-        # incorporate unimix back into logits (stable)
-        logits = torch.log(probs.clamp_min(1e-8)) # stable logits after unimix
-        z_st = st_onehot_from_logits(logits)  # [B,L,K] z discrete but derivable
-        z_flat = z_st.view(-1, self.output_dimension)
-        return z_flat, logits
     
     def _gru_step(self, prev_h: torch.Tensor, inp_bt: torch.Tensor) -> torch.Tensor:
         return self.gru(inp_bt, prev_h)
@@ -129,7 +119,7 @@ class RSSM(nn.Module): # need specific train loop
         x = torch.cat([aemb, zemb], dim=-1)
         
         state_next_h, prior_logits_pure = self.compute_prior(state, x)        
-        z_new_flat, _ = self._logits_to_st_z(prior_logits_pure)
+        z_new_flat, _ = logits2discrate(prior_logits_pure, self.L, self.K)
 
         
         return self.apply_mask(state_next_h, z_new_flat, state, prior_logits_pure, prior_logits_pure, mask_t)
@@ -191,16 +181,14 @@ class RSSM(nn.Module): # need specific train loop
         state_next, prior_logits = self.compute_prior(state, x)
 
         
-        # Unimix Dreamer V3
-        
         posterior_logits = self.compute_posterior(state_next, obs_encoded)
+        # Unimix Dreamer V3
         
         posterior_probs = unimix_probs(torch.softmax(posterior_logits, dim=-1), unimix=self.unimix)
         posterior_logits_mix = torch.log(posterior_probs.clamp_min(1e-8))
         ## --
         
-        z_st = st_onehot_from_logits(posterior_logits_mix)
-        z_new = z_st.view(-1, self.L * self.K)
+        z_new = st_onehot(posterior_logits_mix)
 
         return self.apply_mask(state_next, z_new, state, posterior_logits_mix, prior_logits, mask_t)
         

@@ -149,6 +149,7 @@ class Dreamer(L.LightningModule):
         l_rep_bt  = loss_representation(q_logits, p_logits, mask=mask, beta=self.hparams.beta_rep)
         
         l_kl = l_dyn_bt + l_rep_bt
+        
         if free_n > 0:
             l_kl = torch.max(l_kl, torch.tensor(free_n))
 
@@ -209,7 +210,6 @@ class Dreamer(L.LightningModule):
     def forward(self, obs: torch.Tensor, actions: torch.Tensor, att_user:torch.Tensor, mask:torch.Tensor|None=None) -> Dict[str, torch.Tensor]:
         B, T, _, _, _ = obs.shape
 
-        
         # -- init memory
         state = self.rssm.init_state(B, device=obs.device)
 
@@ -228,18 +228,19 @@ class Dreamer(L.LightningModule):
             post_logits.append(state.z_logits)
             prior_logits.append(plogits)
 
-        post_h = torch.stack(post_h, dim=1)            # [B,T,H]
-        post_z = torch.stack(post_z, dim=1)            # [B,T,L*K]
-        post_logits = torch.stack(post_logits, dim=1)  # [B,T,L,K]
+        post_h = torch.stack(post_h, dim=1)            
+        post_z = torch.stack(post_z, dim=1)            
         
-        prior_logits = torch.stack(prior_logits, dim=1)# [B,T,L,K]
+        post_logits  = torch.stack(post_logits, dim=1)  
+        prior_logits = torch.stack(prior_logits, dim=1)
 
-        feat = torch.cat([post_h, post_z], dim=-1)     # [B,T,feat_dim]
+        feat = torch.cat([post_h, post_z], dim=-1)     
         feat = self.feat_proj(feat)
-        x_hat = self.predict_obs(feat)                    # [B,T,3,H,W] (H,W dipende da VAE o conv)
-        r_hat = self.predict_reward(feat)    # [B,T]
-        att_hat = self.predict_user_att(feat)
-        c_logits = self.predict_continue(feat)   # [B,T]
+
+        x_hat    = self.predict_obs(feat)                    
+        r_hat    = self.predict_reward(feat)
+        att_hat  = self.predict_user_att(feat)
+        c_logits = self.predict_continue(feat) 
 
 
         return {
@@ -265,10 +266,10 @@ class Dreamer(L.LightningModule):
         obs = batch["obs"]
         if obs.dtype == torch.uint8:
             batch["obs"] = obs.float().div_(255.0).detach()
+        
         out = self.forward(batch["obs"], batch["action"], batch["user_att"], batch["mask"])
         
 
-        # Logging Validation
         loss_batch, components = self.compute_loss(out, batch, self.hparams.free_nats)
         weights = batch["weight"]
         loss = (loss_batch * weights).mean()
@@ -290,22 +291,21 @@ class Dreamer(L.LightningModule):
         
     
     def training_step(self, batch, batch_idx):
-        # 1. Forward
-        priority_idx = batch["priority_idx"].detach().cpu().numpy()
         
+        priority_idx = batch["priority_idx"].detach().cpu().numpy()
         obs = batch["obs"]
+
         if obs.dtype == torch.uint8:
             batch["obs"] = obs.float().div_(255.0).detach()
         
         out = self.forward(batch["obs"], batch["action"], batch["user_att"], batch["mask"])
         
-        # 2. compute loss
         loss_batch, components = self.compute_loss(out, batch)
 
         weights = batch["weight"]
         loss = (loss_batch * weights).mean()
         
-        self.log_dict(components, prog_bar=True, on_step=True, on_epoch=True)
+        self.log_dict(components,    prog_bar=True, on_step=True, on_epoch=True)
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
 
         # 4. Return per PER e Ottimizzatore
