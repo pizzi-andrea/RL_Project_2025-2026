@@ -24,13 +24,14 @@ def st_onehot(logits: torch.Tensor) -> torch.Tensor:
         y_hard = F.one_hot(idx, num_classes=shape[-1]).float()
     
     return y_hard + (probs - probs.detach())
-def logits2discrate(self, logits: torch.Tensor, L:int, K:int) -> tuple[torch.Tensor, torch.Tensor]: #conversion logit-> discrete z
+def logits2discrate(logits: torch.Tensor, L:int, K:int, unimix=0.01) -> tuple[torch.Tensor, torch.Tensor]: #conversion logit-> discrete z
         # logits: [B,L*K] -> [B,L,K]
         logits = logits.view(-1, L, K)
         probs = torch.softmax(logits, dim=-1) #softmax to obtain a probability
-        probs = unimix_probs(probs, unimix=self.unimix) #unimix that adds some uniform noise
+        if unimix > 0.0:
+            probs = unimix_probs(probs, unimix=unimix) #unimix that adds some uniform noise
         # incorporate unimix back into logits (stable)
         logits = torch.log(probs.clamp_min(1e-8)) # stable logits after unimix
         z_st = st_onehot(logits)  # [B,L,K] z discrete but derivable
-        z_flat = z_st.view(-1, self.L * self.K)
+        z_flat = z_st.view(-1, L * K)
         return z_flat, logits

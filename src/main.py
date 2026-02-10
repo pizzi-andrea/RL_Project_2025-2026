@@ -98,7 +98,8 @@ def main():
                 beta_pred=config["rssm_config"]["beta_pred"],
                 beta_rep=config["rssm_config"]["beta_rep"],
                 vae=vae_model,
-                free_nats=config["rssm_config"]["free_nats"]  
+                free_nats=config["rssm_config"]["free_nats"],
+                unimix=config["rssm_config"]["unimix"]
         )  
 
     if args.load_weights and Path(config["global_config"]["policy_w"]).exists():

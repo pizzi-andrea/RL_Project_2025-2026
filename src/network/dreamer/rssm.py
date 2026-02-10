@@ -119,7 +119,7 @@ class RSSM(nn.Module): # need specific train loop
         x = torch.cat([aemb, zemb], dim=-1)
         
         state_next_h, prior_logits_pure = self.compute_prior(state, x)        
-        z_new_flat, _ = logits2discrate(prior_logits_pure, self.L, self.K)
+        z_new_flat, _ = logits2discrate(prior_logits_pure, self.L, self.K, self.unimix)
 
         
         

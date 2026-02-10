@@ -140,7 +140,7 @@ def collate_fn(batch):
     batch_user_att = [torch.from_numpy(b["user_att"]) for b in batch]
     batch_idx = torch.stack( [torch.as_tensor(b["priority_idx"],dtype=torch.uint32) for b in batch])
     batch_mask = torch.stack( [torch.as_tensor(b["mask_action"],dtype=torch.bool) for b in batch])
-    batch_weight = torch.stack([torch.as_tensor(b["weight"],dtype=torch.uint32) for b in batch])
+    batch_weight = torch.stack([torch.as_tensor(b["weight"],dtype=torch.float32) for b in batch])
     
  
     obs = pad_sequence(batch_obs, batch_first=True)

@@ -151,7 +151,10 @@ class Dreamer(L.LightningModule):
         l_kl = l_dyn_bt + l_rep_bt
         
         if free_n > 0:
-            l_kl = torch.max(l_kl, torch.tensor(free_n))
+            l_kl = torch.maximum(l_kl, torch.tensor(free_n, device=l_kl.device))
+        
+            if mask is not None:
+                l_kl = l_kl * mask
 
         
         loss_total_bt = l_pred_bt + l_kl
@@ -162,6 +165,7 @@ class Dreamer(L.LightningModule):
         
         
         components = {
+            "KL_divergence"  : l_kl.sum().item() / mask.sum().item(),
             "prediction_loss": l_pred_bt.sum().item() / mask.sum().item(), 
             "dynamic_loss":    l_dyn_bt.sum().item()  / mask.sum().item(),
             "representation_loss": l_rep_bt.sum().item() / mask.sum().item(),
@@ -196,10 +200,10 @@ class Dreamer(L.LightningModule):
 
  
     def predict_reward(self, feat):
-        return self.reward_head(feat).squeeze(-1)
+        return self.reward_head(feat).squeeze(-1) # pred directly in symlog space
     
     def predict_continue(self, feat):
-        return self.cont_head(feat).squeeze(-1)
+        return self.cont_head(feat).squeeze(-1) # pred directly in symlog space
     
     def predict_obs(self, feat):
         return self.decoder(feat) 
@@ -274,8 +278,8 @@ class Dreamer(L.LightningModule):
         weights = batch["weight"]
         loss = (loss_batch * weights).mean()
         
-        self.log_dict(components, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        #self.log_dict(components, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("validation_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         
         self._log_validation_images(batch["obs"], out["x_hat"])
             
@@ -308,6 +312,11 @@ class Dreamer(L.LightningModule):
         self.log_dict(components,    prog_bar=True, on_step=True, on_epoch=True)
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
 
+        #print(f"--- DEBUG STEP {self.global_step} ---")
+        #print(f"Obs Range: min={batch['obs'].min()}, max={batch['obs'].max()}")
+        #print(f"Weights Esempio (primi 5): {batch['weight'][:5]}")
+        #print(f"Mask Sum: {batch['mask'].sum().item()} / {batch['mask'].numel()}")
+        #print(f"Prediction Loss Raw: {components['prediction_loss']}")
         # 4. Return per PER e Ottimizzatore
         return {
             "loss": loss,
