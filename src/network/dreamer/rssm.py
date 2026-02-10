@@ -122,6 +122,8 @@ class RSSM(nn.Module): # need specific train loop
         z_new_flat, _ = logits2discrate(prior_logits_pure, self.L, self.K)
 
         
+        
+        
         return self.apply_mask(state_next_h, z_new_flat, state, prior_logits_pure, prior_logits_pure, mask_t)
     
     def apply_mask(self, h_new, z_new, prev, post_logits, prior_logits, mask=None):
@@ -178,10 +180,10 @@ class RSSM(nn.Module): # need specific train loop
         x = torch.cat([emb_action, emb_latent], dim=-1)
         
         
-        state_next, prior_logits = self.compute_prior(state, x)
+        h, prior_logits = self.compute_prior(state, x)
 
         
-        posterior_logits = self.compute_posterior(state_next, obs_encoded)
+        posterior_logits = self.compute_posterior(h, obs_encoded)
         # Unimix Dreamer V3
         
         posterior_probs = unimix_probs(torch.softmax(posterior_logits, dim=-1), unimix=self.unimix)
@@ -189,8 +191,16 @@ class RSSM(nn.Module): # need specific train loop
         ## --
         
         z_new = st_onehot(posterior_logits_mix)
+        z_new = z_new.view(-1, self.L * self.K)
 
-        return self.apply_mask(state_next, z_new, state, posterior_logits_mix, prior_logits, mask_t)
+        return self.apply_mask(
+            h,  
+            z_new, 
+            state, 
+            posterior_logits_mix, 
+            prior_logits, 
+            mask_t
+        )
         
 
 
