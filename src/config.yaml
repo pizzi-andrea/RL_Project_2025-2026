@@ -41,11 +41,11 @@ rssm_config:
   rssm_dataset_path_valid: "Doom4RSSMs/validation" #funny/train
   train_epoch: 10
   train_batch: 16
-  free_nats: 0.001
+  free_nats: 0
   beta_dyn: 1
   beta_pred: 1
   beta_rep: 0.1
-  lr: 0.0003
+  lr: 0.0001
 
 
 policy_config:
@@ -54,7 +54,7 @@ policy_config:
   horizont: 20
   burn_in: 3
   train_batch: 32
-  lr: 0.0003
-  actor_entropy: 0.005
+  lr: 0.0001
+  actor_entropy: 0.0001
 
 
