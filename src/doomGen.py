@@ -1,4 +1,5 @@
 import argparse
+import numpy as np
 import pandas
 from collections import OrderedDict
 import os
@@ -8,9 +9,10 @@ from pathlib import Path
 from random_policy import Random_Policy
 from env_info import ATT_PLAYER, GamePad, GLOBAL_BUTTONS, ButtonActionMapper
 import gymnasium
-
+from doomData import *
+from tofolder import *
 from vizdoom import gymnasium_wrapper
-
+from globals import DoomMap, DoomNames
 
 
 
@@ -24,20 +26,23 @@ if __name__ == "__main__":
     parser.add_argument('-n', '--episods', required=True, default=10, type=int)
     parser.add_argument('-s', '--split', required=True, choices=["train", "test", "validation"])
     parser.add_argument('-e', '--env', required=False, default="VizdoomBasic-v0", type=str)
-    
-    parser.add_argument('--episodic', required=False, action='store_true')
-    parser.add_argument("-r", "--reload", required=False, action='store_true' )
-    parser.add_argument("-m", "--metadata", required=False, action='store_true')
+    parser.add_argument('-t', '--horizont', required=False, default=500, type=int)
     parser.add_argument("--skip_frame", required=False, default=1, type=int)
     parser.add_argument("--sticky" ,required=False, action="store_true")
-    
+    parser.add_argument("--resolution_h", required=False, default=120, type=int)
+    parser.add_argument("--resolution_w", required=False, default=160, type=int)
+    parser.add_argument("--multibinary", required=False, action="store_true")
+    bucket_size = 500
+    buckets = []
     
     args = parser.parse_args()
+    
     env = gymnasium.make(
     args.env,
     render_mode="rgb_array",
     frame_skip=args.skip_frame,
-    max_buttons_pressed=0
+    max_buttons_pressed=1,
+    max_episode_steps=args.horizont
     )
 
     if args.sticky:
@@ -45,77 +50,81 @@ if __name__ == "__main__":
     else:
         sticky = 0
 
-    gamepad = GamePad()
-    mapper = ButtonActionMapper.from_env(env)
+    #gamepad = GamePad()
+    #mapper = ButtonActionMapper.from_env(env)
     agent = Random_Policy(env.action_space, sticky)
 
     #check 
-    print("ENV buttons:", mapper.env_button_names)
-    print("GLOBAL buttons:", GLOBAL_BUTTONS)
+    #print("ENV buttons:", mapper.env_button_names)
+    #print("GLOBAL buttons:", GLOBAL_BUTTONS)
 
-    missing = [b for b in mapper.env_button_names if b not in GLOBAL_BUTTONS]
-    extra   = [b for b in GLOBAL_BUTTONS if b not in mapper.env_button_names]
+    #missing = [b for b in mapper.env_button_names if b not in GLOBAL_BUTTONS]
+    #extra   = [b for b in GLOBAL_BUTTONS if b not in mapper.env_button_names]
 
-    print("Buttons in env but not in global:", missing)
-    print("Buttons in global but not in env:", extra)
+    #print("Buttons in env but not in global:", missing)
+    #print("Buttons in global but not in env:", extra)
         
 
 
     base_path = Path(args.dataset).joinpath(args.split)
-    ids = 0
-    init_episode = 0
-    if args.reload and base_path.exists():
-        if args.episodic:
-            init_episode = len(list(base_path.iterdir()))
-            #args.episods += init_episode 
-        else:    
-            ids = sum(1 for _ in base_path.rglob("obs/*.png"))
+    if not base_path.exists():
+        os.makedirs(base_path.joinpath("0"))
+        current_bucket = base_path.joinpath("0")
+        init_episode = 0
+        buckets.append(current_bucket)
+        bucket_capacity = 500
+        idx = 0
     else:
-        os.makedirs(base_path)
-        
-
+        buckets = list(base_path.iterdir())
+        current_bucket = buckets[-1]
+        init_episode = len(list(current_bucket.iterdir()))
+        idx = init_episode
+        bucket_capacity = bucket_size - init_episode
+        if bucket_capacity <= 0:
+            current_bucket = Path(base_path.joinpath(f"{len(buckets)}"))
+            os.mkdir(current_bucket)
+            buckets.append(current_bucket)
+            idx = 0
+            bucket_capacity = 500
     
     buffer = []
-    stat_name = [v.name for v in env.unwrapped.game.get_available_game_variables()]
+    local_stat_name    = [v.name for v in env.unwrapped.game.get_available_game_variables()]
+    local_buttons_name = [b.name for b in env.unwrapped.game.get_available_buttons()]
+    act_mask = dict.fromkeys(DoomNames.buttons_names, 0)
+    for b in local_buttons_name:
+        act_mask[b] = 1
+    mask_values = [act_mask[name] for name in DoomNames.buttons_names]
+    act_mask = np.array(mask_values, dtype=bool)
     
-    _player = OrderedDict()
-    for s in stat_name:
-        _player[s] = None
+    print("Local button dected: ", local_buttons_name)
+    print("Local attribute dected", local_stat_name)
+    print("buttons mask dected:", act_mask)
     
     for episode in tqdm(range(init_episode, init_episode + args.episods)):
         
-        
-        gamepad.reset()
+        ids = 0
+        #gamepad.reset()
         game, _ = env.reset()
         s = game["screen"]
-        game_info = game["gamevariables"] 
+        game_info = game["gamevariables"]
+        
+        action = (np.zeros_like(agent.act(s)) if args.multibinary else 0)
         done = False
         reward = 0
         
-        if args.episodic:
-            work_path = base_path.joinpath(f"{episode}")
-            os.makedirs(work_path.joinpath("obs"))
-        else:
-            os.makedirs(base_path.joinpath("obs"), exist_ok=True)
-            work_path = base_path
-            
         while not done:
-            # ---------- current state ----------
-            obs_path = work_path / "obs" / f"{ids}.png"
-            Image.fromarray(s).save(obs_path)
+            
+            # -- encode buttons in global map 
+            act = DoomMap.local2global(action, local_buttons_name, DoomNames.buttons_names, not args.multibinary)
+            att = DoomMap.local2global(game_info, local_stat_name, DoomNames.att_player_names, False)
 
-            for idx, k in enumerate(_player.keys()):
-                _player[k] = game_info[idx]
+            
+
+
+            
 
             # ---------- action ----------
             action = agent.act(s)
-
-            
-            # ---------- remap action ----------
-            gamepad.reset() #doing so: buttons that are not in the env remain 0
-            mapper.apply_to_gamepad(action, gamepad)
-
-
 
             # ---------- step ----------
             game_next, reward, terminated, truncated, info = env.step(action)
@@ -126,36 +135,39 @@ if __name__ == "__main__":
 
             # ---------- store transition ----------
             transition = {
+                "obs": cv.resize(s, (args.resolution_w,args.resolution_h)),
                 "ids": ids,
                 "reward": reward,
                 "done": done,
-                "next_ids": ids + 1,
             }
 
-            att_diff = ATT_PLAYER.keys() - _player.keys()
-
-            dict_diff = {k: 0 for k in att_diff}
-
-            buffer.append(transition | _player | gamepad.to_dict() | dict_diff)
+            #buffer.append(transition | {"action": np.array(list(gamepad.to_dict().values())), "att_player":np.array(list(player.values()))})
+            buffer.append( transition | act | att )
 
             # ---------- avanza ----------
             s = s_next
             game_info = game_info_next
             ids += 1
-            gamepad.reset()
-
-
-            
+            #gamepad.reset()
+                    
         
-        if args.metadata:
-            pandas.DataFrame(buffer).to_csv(work_path.joinpath("transitions.csv"), index=False)
-            buffer = []
-            ids = 0
-
+        if bucket_capacity <= 0:
+            current_bucket = Path(base_path.joinpath(f"{len(buckets)}"))
+            os.mkdir(current_bucket)
+            buckets.append(current_bucket)
+            idx = 0
+            bucket_capacity = 500
+        
+        dict2folder(buffer, current_bucket.joinpath(f"{idx}"))
+        np.savez_compressed(current_bucket.joinpath(f"{idx}").joinpath("mask_actions.npz"), mask=act_mask)
+        idx += 1
+        bucket_capacity -=1
+        buffer.clear()
+        # aggiorna anche sopra semplificando la struttura del dataset
+    
     env.close()
     
-    if args.metadata and not args.episodic:
-        pandas.DataFrame(buffer).to_csv(base_path.joinpath("transitions.csv"), index=False)
+    
         
 
         

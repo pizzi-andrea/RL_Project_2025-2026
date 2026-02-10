@@ -1,7 +1,7 @@
 import torchvision
 from ..encoder.VAE import VAE
 from typing import Dict
-
+from timm.optim.laprop import LaProp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,96 +11,10 @@ from typing import Optional
 
 # Vision Encoders
 from ..encoder.VAE import VAE
-
 # RNN network
 from ..dreamer.rssm import RSSM
-
 from .utils import *
-# -------------------------
-# VAE adaptation
-# -------------------------
-
-class VAEAdapter(nn.Module):
-    def __init__(self, vae: VAE):
-        super().__init__()
-        self.vae = vae
-    
-
-class PERAdapter(L.Callback):
-    def __init__(self, buffer):
-        super().__init__()
-        self.buffer_train = buffer
-    
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        index = outputs["episods_idx"].cpu().detach().numpy().squeeze(-1)
-        loss = outputs["episods_loss"].cpu().detach().numpy()
-        
-        self.buffer_train.update(priority_idx=index, losses=loss)
-        
-
-class VAEEncoderAdapter(VAEAdapter):
-    """
-    Prende immagini [B,T,3,H,W] o [B,3,H,W] e ritorna enc_x.
-    Qui enc_x = mean del VAE (deterministico).
-    """
-    def __init__(self, vae: VAE, out_dim:int):
-        super().__init__(vae)
-        self.out_dim = out_dim
-        self.proj = None
-        if out_dim != vae.hparams.latent_dim:
-            self.proj = nn.Sequential(
-                nn.Linear(vae.hparams.latent_dim, out_dim),
-                nn.LayerNorm(out_dim),
-                nn.SiLU()
-            )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [B,T,C,H,W] oppure [B,C,H,W]
-        if x.dim() == 5:
-            B, T, C, H, W = x.shape
-            
-            
-            x = x.reshape(B * T, C, H, W)
-            mean, _ = self.vae.encode(x)  # mean: [B*T, latent_dim]
-            if self.proj is not None:
-                mean = self.proj(mean)
-            return mean.view(B, T, -1)
-        else:
-            mean, _ = self.vae.encode(x)
-            if self.proj is not None:
-                mean = self.proj(mean)
-            return mean
-
-
-
-class VAEDecoderAdapter(VAEAdapter):
-    def __init__(self, vae: VAE, feat_dim:int, decode_shape:tuple[int,int, int] =(3, 120,160)):
-        super().__init__(vae)
-        self.decode_shape = decode_shape
-        self.feat_proj = nn.Sequential(
-            nn.Linear(feat_dim, self.vae.hparams.latent_dim),
-            nn.LayerNorm(self.vae.hparams.latent_dim),
-            nn.SiLU()
-        )
-
-    def forward(self, feat: torch.Tensor) -> torch.Tensor:
-        if feat.dim() == 3:
-            B, T, D = feat.shape
-            # Appiattisci B e T
-            z = feat.view(B * T, D) 
-            z = self.feat_proj(z)
-            
-            # Decodifica standard (output sarà [B*T, 3, 240, 320])
-            imgs = self.vae.decode(z) 
-            
-            # Reshape manuale alla fine
-            return imgs.view(B, T, self.decode_shape[0], self.decode_shape[1], self.decode_shape[2])
-        else:
-            z = self.feat_proj(feat)
-            return self.vae.decode(z)
-
-
-
+from ..adapters import *
 # -------------------------
 # World Model LightningModule - need use REP buffer - remove 
 # -------------------------
@@ -165,19 +79,19 @@ class Dreamer(L.LightningModule):
 
         self.att_encoder = nn.Sequential(
             nn.Linear(att_dim, out_features=internal_hidden_dim),
-            nn.LayerNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim),
             nn.SiLU()
         )
 
         self.encoder_proj = nn.Sequential(
             nn.Linear(2*internal_hidden_dim, internal_hidden_dim),
-            nn.LayerNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim),
             nn.SiLU()
         )
 
         self.feat_proj = nn.Sequential(
             nn.Linear(rssm_feat_dim, internal_hidden_dim),
-            nn.LayerNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim),
             nn.SiLU()
         )
 
@@ -187,7 +101,7 @@ class Dreamer(L.LightningModule):
         # reward predictor
         self.reward_head = nn.Sequential(
             nn.Linear(internal_hidden_dim, internal_hidden_dim),
-            nn.LayerNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim),
             nn.SiLU(),
             nn.Linear(internal_hidden_dim, 1),
         )
@@ -195,7 +109,7 @@ class Dreamer(L.LightningModule):
         # continue predictor
         self.cont_head = nn.Sequential(
             nn.Linear(internal_hidden_dim, internal_hidden_dim),
-            nn.LayerNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim),
             nn.SiLU(),
             nn.Linear(internal_hidden_dim, 1),
         )
@@ -203,21 +117,14 @@ class Dreamer(L.LightningModule):
         # attribute predictor
         self.att_head = nn.Sequential(
             nn.Linear(internal_hidden_dim, internal_hidden_dim),
-            nn.LayerNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim),
             nn.SiLU(),
             nn.Linear(internal_hidden_dim, att_dim)
         )
-
-        # -- encoders
-
-        
     
-    
-    def compute_loss(self, out, batch):
-        """
-        Compute RSSM loss
-        """
-        # -
+    def compute_loss(self, out, batch, free_n=0):
+        # Estrai dati...
+        mask = batch["mask"]
         obs = batch["obs"]           # [B, T, C, H, W]
         rewards = batch["reward"]    # [B, T]
         cont = batch["done"]         # [B, T]
@@ -230,27 +137,36 @@ class Dreamer(L.LightningModule):
         rewards_hat = out["r_hat"]
         cont_hat = out["c_logits"]
         user_att_hat = out["att_hat"]
+   
+        l_pred_bt = loss_prediction(obs_hat, obs, 
+                                    rewards_hat, rewards, 
+                                    cont_hat,cont, 
+                                    user_att_hat, user_att, 
+                                    mask=mask, 
+                                    beta=self.hparams.beta_pred
+        )
+        l_dyn_bt  = loss_dynamic(q_logits, p_logits, mask=mask, beta=self.hparams.beta_dyn)
+        l_rep_bt  = loss_representation(q_logits, p_logits, mask=mask, beta=self.hparams.beta_rep)
         
-        loss_pred, loss_pred_t = loss_prediction(obs_hat, rewards_hat, cont_hat, user_att_hat, obs, rewards,cont, user_att, mask=mask, beta=self.hparams.beta_pred)
-        loss_dy, loss_dy_t, loss_dy_raw = loss_dynamic(q_logits, p_logits, mask=mask, beta=self.hparams.beta_dyn)
-        loss_rep, loss_rep_t, loss_rep_raw = loss_representation(q_logits, p_logits, mask=mask, beta=self.hparams.beta_rep)
-
+        l_kl = l_dyn_bt + l_rep_bt
+        if free_n > 0:
+            l_kl = torch.max(l_kl, torch.tensor(free_n))
 
         
-        loss = loss_pred + loss_dy + loss_rep
-        loss_t = self.hparams.beta_pred*loss_pred_t + self.hparams.beta_dyn*loss_dy_t + self.hparams.beta_rep*loss_rep_t
-
-
-        # 
+        loss_total_bt = l_pred_bt + l_kl
+        
+      
+        valid_steps = mask.sum(dim=1).clamp(min=1.0) # [B]
+        loss_batch = loss_total_bt.sum(dim=1) / valid_steps # [B]
+        
         
         components = {
-            "prediction_loss": loss_pred.detach().cpu().item(),
-            "dynamic_loss": loss_dy_raw,
-            "representation_loss": loss_rep_raw,
-           
+            "prediction_loss": l_pred_bt.sum().item() / mask.sum().item(), 
+            "dynamic_loss":    l_dyn_bt.sum().item()  / mask.sum().item(),
+            "representation_loss": l_rep_bt.sum().item() / mask.sum().item(),
         }
-
-        return loss, components, loss_t
+        
+        return loss_batch, components
     
     def setup(self, stage):
         self.unfreeze()
@@ -261,11 +177,11 @@ class Dreamer(L.LightningModule):
 
     def unfreeze_model(self):
         for p in self.parameters():
-            p.requires_grad = False
+            p.requires_grad = True
     
     def configure_optimizers(self):
         
-        return torch.optim.AdamW(self.parameters(), self.hparams.lr)
+        return LaProp(self.parameters(), self.hparams.lr, eps=1e-6)
     
     def encode(self, obs, user_att):
         enc = self.encoder(obs)
@@ -277,6 +193,7 @@ class Dreamer(L.LightningModule):
         embs_encode_state = self.encoder_proj(enc)
         return embs_encode_state
 
+ 
     def predict_reward(self, feat):
         return self.reward_head(feat).squeeze(-1)
     
@@ -345,16 +262,19 @@ class Dreamer(L.LightningModule):
         }
     
     def validation_step(self, batch, batch_idx):
-        
+        obs = batch["obs"]
+        if obs.dtype == torch.uint8:
+            batch["obs"] = obs.float().div_(255.0).detach()
         out = self.forward(batch["obs"], batch["action"], batch["user_att"], batch["mask"])
         
 
         # Logging Validation
-        loss, components, _ = self.compute_loss(out, batch)
-        components["validation_loss"] = loss
-        self.log_dict(components, prog_bar=True, on_step=True, on_epoch=True)
+        loss_batch, components = self.compute_loss(out, batch, self.hparams.free_nats)
+        weights = batch["weight"]
+        loss = (loss_batch * weights).mean()
         
-        # Gestione Immagini (solo batch 0)
+        self.log_dict(components, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
         
         self._log_validation_images(batch["obs"], out["x_hat"])
             
@@ -371,19 +291,28 @@ class Dreamer(L.LightningModule):
     
     def training_step(self, batch, batch_idx):
         # 1. Forward
-        priority_idx = batch["priority_idx"].detach().cpu()
+        priority_idx = batch["priority_idx"].detach().cpu().numpy()
+        
+        obs = batch["obs"]
+        if obs.dtype == torch.uint8:
+            batch["obs"] = obs.float().div_(255.0).detach()
+        
         out = self.forward(batch["obs"], batch["action"], batch["user_att"], batch["mask"])
         
         # 2. compute loss
-        loss, components, loss_t = self.compute_loss(out, batch)
-        components["train_loss"] = loss
-        
+        loss_batch, components = self.compute_loss(out, batch)
+
+        weights = batch["weight"]
+        loss = (loss_batch * weights).mean()
         
         self.log_dict(components, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
 
         # 4. Return per PER e Ottimizzatore
         return {
             "loss": loss,
             "episods_idx": priority_idx,
-            "episods_loss": loss_t.detach().cpu().mean(dim=-1)
+            "episods_loss": loss_batch.detach().cpu().numpy()
         }
+    
+    

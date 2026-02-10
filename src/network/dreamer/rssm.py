@@ -65,18 +65,18 @@ class RSSM(nn.Module): # need specific train loop
 
         self.action_embed = nn.Sequential(
             nn.Linear(action_dim, embed_dim),
-            nn.LayerNorm(embed_dim), # <---
+            nn.RMSNorm(embed_dim), # <---
             nn.SiLU()
         )
         self.z_embed = nn.Sequential(
             nn.Linear(self.output_dimension, embed_dim),
-            nn.LayerNorm(embed_dim), # 
+            nn.RMSNorm(embed_dim), # 
             nn.SiLU()
         )
 
         self.gru_input_proj = nn.Sequential(
             nn.Linear(2*embed_dim, gru_projection_dim),
-            nn.LayerNorm(gru_projection_dim), # 
+            nn.RMSNorm(gru_projection_dim), # 
             nn.SiLU()
         )
 
@@ -86,14 +86,14 @@ class RSSM(nn.Module): # need specific train loop
         self.prior_net = nn.Sequential( # self.prior_net(h) -> logits of z
 
             nn.Linear(deter_dim, deter_dim),
-            nn.LayerNorm(deter_dim),
+            nn.RMSNorm(deter_dim),
             nn.SiLU(),
             nn.Linear(deter_dim, self.L * self.K),
         )
         # posterior logits observation + memory
         self.post_net = nn.Sequential(
             nn.Linear(deter_dim + embed_dim, deter_dim),
-            nn.LayerNorm(deter_dim),
+            nn.RMSNorm(deter_dim),
             nn.SiLU(),
             nn.Linear(deter_dim, self.output_dimension),
         )
@@ -119,6 +119,7 @@ class RSSM(nn.Module): # need specific train loop
     
     def _gru_step(self, prev_h: torch.Tensor, inp_bt: torch.Tensor) -> torch.Tensor:
         return self.gru(inp_bt, prev_h)
+    
     
     def imagine_step(self, state: RSSMState, action: torch.Tensor, mask_t: Optional[torch.Tensor]= None) -> Tuple[RSSMState, torch.Tensor]:
         """Predict next state using the 'imagination' mechanism."""

@@ -1,6 +1,5 @@
 import numpy as np
-from episode import Episode
-from typing import Callable
+from typing import Any
 
 class SumTree:
     """SumTree buffer for PER algorithm"""
@@ -9,6 +8,7 @@ class SumTree:
         
         self.priority = np.zeros((2*size)-1, dtype=np.float32)
         self.buffer = np.ndarray(shape=size, dtype=np.object_)
+        self.buffer.fill(None)
         self.buffer_idx = 0
         self.capacity = self.size
         
@@ -50,9 +50,10 @@ class SumTree:
         if idx < 0 or idx > len(self.priority): raise IndexError
         return (idx + 1) - self.size
 
-    def store(self, transition:Episode, priority:float):
+    def store(self, episode:Any, priority:float):
         """Insert new entry in the buffer"""
-        self.buffer[self.buffer_idx] = transition
+
+        self.buffer[self.buffer_idx] = episode
         tree_idx = self._buffer_to_idx(self.buffer_idx)
         self.priority[tree_idx] = priority
         self._update(tree_idx)
@@ -95,7 +96,7 @@ class SumTree:
         """Return free space in buffer"""
         return self.capacity
 
-    def get_transition(self, sum:float) -> tuple[Episode, int, int]:
+    def get_transition(self, sum:float) -> tuple[Any, int, int]:
         
         sum_max = self.priority[0]
         sum = min(sum, sum_max - 1e-4)
@@ -113,16 +114,8 @@ class SumTree:
             if current_idx > len(self.priority):
                 raise IndexError("leaf node not valid")
         
-
         buff_idx = self._idx_to_buffer(current_idx)
     
         return self.buffer[buff_idx], current_idx, buff_idx
-            
-    
-
-    
-    
-if __name__ == "__main__":
-    tree = SumTree(9)
 
     

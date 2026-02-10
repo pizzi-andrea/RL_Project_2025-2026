@@ -2,8 +2,7 @@ import numpy as np
 from sumTree import SumTree
 from abc import ABC, abstractmethod
 from typing import Any
-
-from episode import Transition
+from os import remove
 
 class PriorityExperienceReplay(ABC):
 
@@ -13,7 +12,7 @@ class PriorityExperienceReplay(ABC):
         pass
     
     @abstractmethod
-    def store(self, transition) -> int:
+    def store(self, transition, replace:bool=False) -> int:
         pass
     
     @abstractmethod
@@ -29,6 +28,11 @@ class PriorityExperienceReplay(ABC):
     def info(self):
         """General information for debugging pourposes"""
         pass
+    
+    def clear(self):
+        """Clear sumTree structure"""
+        self.buffer.clear()
+        pass
 
     def __len__(self):
         return len(self.buffer)
@@ -43,7 +47,7 @@ class CountBasedPriority(PriorityExperienceReplay):
         self.PMAX = 1
         self.counter = np.zeros(shape=(len(self.buffer)), dtype=np.uint32)
     
-    def store(self, transition) -> int:
+    def store(self, transition, replace:bool=False) -> int:
         idx = self.buffer.buffer_idx
         self.counter[idx] = 0
         pi = self.PMAX
@@ -79,6 +83,12 @@ class CountBasedPriority(PriorityExperienceReplay):
         print(f"Priority probability: {self.buffer.priority.tolist()[self.buffer.size:]}")
         print(f"Number of visits: {self.counter}")
 
+
+    def clear(self):
+        super().clear()
+        self.PMAX = 1
+        self.counter = np.zeros(shape=(len(self.buffer)), dtype=np.uint32)
+
     def update(self, **params):
         """not used in countBasedPriority"""
         pass
@@ -106,6 +116,13 @@ class AdversarialReplayPriority(PriorityExperienceReplay):
         if eps <= 0:
             raise ValueError("eps must be > 0")
         # Initialize parameters
+
+        self.alpha = alpha
+        self.eps = eps
+        self. p_max = p_max
+        self.use_running_min = use_running_min
+        self.replace_buff = np.ndarray(len(self.buffer.buffer), dtype=np.bool)
+        self.replace_buff.fill(0)
         self.alpha = float(alpha)
         self.eps = float(eps)
         # Initialize PMAX starting from a small value 
@@ -115,34 +132,46 @@ class AdversarialReplayPriority(PriorityExperienceReplay):
         self.use_running_min = use_running_min
         self.running_min = np.inf
 
-    def store(self, transition) -> int:
+    def store(self, transition:Any, replace:bool=False) -> int:
         """insert a new entry in the buffer with max priority"""
         idx = self.buffer.buffer_idx
+        if self.buffer.buffer[idx] is not None and self.replace_buff[idx]:
+            remove(self.buffer.buffer[idx])
+        
         self.buffer.store(transition, self.PMAX)
         #return the buffer index
+        self.replace_buff[idx] = replace
         return idx
 
-    def get(self, b: int):
-        """Get a batch of b episodes from the buffer"""
-        #root of the tree
-        P = float(self.buffer.get_priority(0))
-        batch = np.ndarray(shape=(b), dtype=np.object_) 
-        priority_idx = np.ndarray(shape=(b), dtype=np.int32)
-        buffer_idx = np.ndarray(shape=(b), dtype=np.int32)
-        #we divide P into b segments (so i'm sure to cover all the range with the random samples)
-        s = P / b
+
+    def get(self, b: int, beta: float = 0.4):
+        total_priority = float(self.buffer.get_priority(0))
+        N = len(self.buffer)
+
+        batch = [None] * b
+        priority_idx = np.empty(b, dtype=np.int32)
+        buffer_idx = np.empty(b, dtype=np.int32)
+        weights = np.empty(b, dtype=np.float32)
+
+        segment = total_priority / b
+
         for i in range(b):
-            low = s * i
-            high = s * (i + 1)
-            #sample a value within the segment
-            mass = np.random.uniform(low, high)
-            #get the corresponding episode
+            mass = np.random.uniform(segment * i, segment * (i + 1))
             ep, p_idx, b_idx = self.buffer.get_transition(mass)
+
             batch[i] = ep
             priority_idx[i] = p_idx
             buffer_idx[i] = b_idx
 
-        return batch, priority_idx, buffer_idx
+            p_i = self.buffer.get_priority(p_idx) / total_priority
+            p_i = max(p_i, 1e-8)
+
+            weights[i] = (1.0 / (N * p_i)) ** beta
+
+        weights /= weights.max()
+        return batch, priority_idx, buffer_idx, weights
+
+
 
     def update(self, **params):
         """
@@ -176,11 +205,22 @@ class AdversarialReplayPriority(PriorityExperienceReplay):
         mx = float(np.max(new_p))
         if mx > self.PMAX:
             self.PMAX = mx
+    def clear(self):
+        super().clear()
+        # Initialize parameters
+        self.alpha = float(self.alpha)
+        self.eps = float(self.eps)
+        # Initialize PMAX starting from a small value 
+        self.PMAX = 1.0
+        self.p_max = float(self.p_max) # upper bound for PMAX
+        # trick: use running min to shift losses (usefull to stabilize the loss)
+        self.running_min = np.inf
+        self.replace_buff.fill(0)
 
     def info(self):
         """Print debug information: alpha, eps, PMAX, leaf priorities"""
         print(f"[AdversarialReplayPriority] alpha={self.alpha}, eps={self.eps}, PMAX={self.PMAX}")
-        print(f"Leaf priorities: {self.buffer.priority.tolist()[self.buffer.size:]}")       
+        print(f"Leaf priorities: {self.buffer.priority.tolist()[:min(len(self.buffer), 10)]}")       
 
 
 class CuriosityReplayPriority(PriorityExperienceReplay):

@@ -8,7 +8,7 @@ from PIL import Image
 from torch import Tensor, no_grad
 from torch.nn.functional import cross_entropy, sigmoid
 class EMAScalar(nn.Module):
-    def __init__(self, decay=0.99, eps=1e-6):
+    def __init__(self, decay=0.98, eps=1e-6):
         super().__init__()
         self.decay = decay
         self.eps = eps
@@ -100,7 +100,7 @@ def make_video(frames, output_path, fps=30):
     frames = frames.cpu().detach()
     frames_video = (sigmoid(frames)*255).to(dtype=torch.uint8)
     frames_video = frames_video.permute(0,2,3,1).numpy()
-    video = frames_video[:, :, :, ::-1]
+    frames_video = frames_video[:, :, :, ::-1]
     num_frames, height, width, _ = frames_video.shape
     fourcc = cv.VideoWriter_fourcc(*'XVID') # Codec per file .mp4
     video_writer = cv.VideoWriter(output_path, fourcc, fps, (width, height))

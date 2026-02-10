@@ -1,6 +1,7 @@
 
 from dataclasses import dataclass
 from typing import Dict, List
+from collections import OrderedDict
 import numpy as np
 
 ATT_PLAYER_NAME = ["HEALTH", "AMMO2","SELECTED_WEAPON","SELECTED_WEAPON_AMMO","KILLCOUNT", "ARMOR"]
@@ -96,7 +97,9 @@ class GamePad:
 
     def __init__(self):
         self.reset()
-        self._inv_button = {idx: button for idx,button in enumerate(self.button.keys())}
+        self._inv_button = OrderedDict()
+        for idx, button in enumerate(self.button.keys()):
+            self._inv_button[idx] = button
     
     def __getitem__(self, idx:int) -> int:
         return self.button[self._inv_button[idx]]

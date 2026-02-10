@@ -8,13 +8,13 @@ class Critic(nn.Module):
         self.register_buffer("buckets", torch.linspace(-20, 20, num_buckets))
         self.l1 = nn.Sequential(
             nn.Linear(in_features=dim_state, out_features=hidden_dim),
-            nn.LayerNorm(hidden_dim),
+            nn.RMSNorm(hidden_dim),
             nn.SiLU(),
             
         )
         self.l2 = nn.Sequential(
             nn.Linear(in_features=hidden_dim, out_features=hidden_dim),
-            nn.LayerNorm(hidden_dim),
+            nn.RMSNorm(hidden_dim),
             nn.SiLU(),
         )
         

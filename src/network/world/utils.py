@@ -40,93 +40,64 @@ def last_valid_from_mask(x_bt: torch.Tensor, mask_bt: torch.Tensor) -> torch.Ten
 def symlog(x):
         return torch.sign(x) * torch.log(torch.abs(x) + 1.0)
 
-def loss_prediction(x_hatlog, r_hatlog, c_hatlog,  att_hatlog, x, r, c, att, beta=1, beta_x=1, beta_r=1, beta_c=1, beta_att=1, mask=None):
-    """Loss for recostruction"""
 
-    # loss for obs
-    loss_x = F.binary_cross_entropy_with_logits(x_hatlog, x, reduction="none")
-    loss_xt = loss_x.mean(dim=(2, 3, 4))
+
+def loss_prediction(x_hat, x, r_hat, r, c_hat, c, att_hat, att, mask=None, 
+                    beta=1, beta_x=1.0, beta_r=1.0, beta_c=1.0, beta_att=1.0):
+    """
+    Ritorna la loss di predizione per ogni passo temporale [B, T]
+    """
+    # 1. Obs Loss [B, T] (Assumendo x normalizzato [0,1] per BCE, altrimenti usa MSE)
+    # reduction='none' è fondamentale per mantenere [B, T]
+    loss_x = F.binary_cross_entropy_with_logits(x_hat, x, reduction='none').mean(dim=(2, 3, 4)) 
     
-    # loss for rewards
-    loss_r = F.mse_loss(r_hatlog, symlog(r), reduction="none")
-    loss_rt = loss_r
+    # 2. Reward Loss [B, T]
+    loss_r = F.mse_loss(r_hat, symlog(r), reduction='none')
+    
+    # 3. Continue Loss [B, T]
+    loss_c = F.binary_cross_entropy_with_logits(c_hat, c, reduction='none')
+    
+    # 4. Attribute Loss [B, T]
+    loss_att = F.mse_loss(att_hat, symlog(att), reduction='none').mean(dim=-1)
 
-    # loss for continus flags
-    loss_c = F.binary_cross_entropy_with_logits(c_hatlog, c, reduction="none")
-    loss_ct = loss_c
+    # Somma pesata
+    loss_total_bt = (loss_x * beta_x) + (loss_r * beta_r) + (loss_c * beta_c) + (loss_att * beta_att)
 
-    # loss for attributes
-    loss_att = F.mse_loss(att_hatlog, symlog(att), reduction="none")
-    loss_attt = loss_att.mean(dim=-1)
-
-
-    loss_pred = +(loss_xt*beta_x + loss_rt*beta_r + loss_ct*beta_c + loss_attt*beta_att)
-
+    # Applica mask (mette a 0 i passi non validi)
     if mask is not None:
-         loss_t = loss_pred * mask
-         loss = loss_t.sum() / torch.clamp(mask.sum(), min=1.0)
-    else:
-         loss_t = loss_pred
-         loss = loss_t.mean(dim=-1).mean()
+        loss_total_bt = loss_total_bt * mask
 
-    loss = beta*loss
-    return loss, loss_t
+    return loss_total_bt * beta # Shape [B, T]
 
-def loss_dynamic(q_log, p_log, mask=None, beta=1):
-    """Loss for dynamic world"""
-    q_log = q_log.detach()
+def loss_dynamic(q_log, p_log, mask=None, beta=1.0):
+    """
+    Ritorna la loss KL dinamica per ogni passo temporale [B, T]
+    """
+    q_log = q_log.detach() # Stop gradient sul posterior
 
-    # compute KL divergence
-    loss_dynamic_t_raw = kl_logits(q_log, p_log).sum(dim=-1)
+    # 1. Calcola KL [B, T]
+    kl_bt = kl_logits(q_log, p_log).sum(dim=-1)
     
-    # hard clamp
-    nats = torch.tensor(1.0, device=q_log.device, dtype=q_log.dtype)
-    loss_dynamic_t = torch.max(loss_dynamic_t_raw, nats)
-    #loss_dynamic_t = loss_dynamic * beta 
-
-    # masking
+    
+    loss_bt = kl_bt
+    
+    # 3. Masking
     if mask is not None:
-        loss_dynamic_t = loss_dynamic_t * mask
-        loss_dynamic_t_raw = loss_dynamic_t_raw*mask
+        loss_bt = loss_bt * mask
         
-        
-        loss_dynamic = loss_dynamic_t.sum() / torch.clamp(mask.sum(), min=1.0)
-        loss_dynamic_raw = (loss_dynamic_t_raw.sum() / torch.clamp(mask.sum(), min=1.0)).detach().cpu().item()
-    else:
-        
-        loss_dynamic = loss_dynamic_t.mean()
-        loss_dynamic_raw = loss_dynamic_t_raw.mean().detach().cpu().item()
-    
-    loss_dynamic = loss_dynamic*beta
-    loss_dynamic_raw = loss_dynamic_raw*beta
-
-    return loss_dynamic, loss_dynamic_t, loss_dynamic_raw
+    return loss_bt*beta # Shape [B, T]
 
 def loss_representation(q_log, p_log, mask=None, beta=0.1):
-    """Loss for reppresentation world"""
-    p_log = p_log.detach()
+    """
+    Ritorna la loss KL representation per ogni passo temporale [B, T]
+    """
+    p_log = p_log.detach() # Stop gradient sul prior
 
-    # compute KL divergence 
-    loss_representation_t_raw = kl_logits(q_log, p_log).sum(dim=-1)
+    kl_bt = kl_logits(q_log, p_log).sum(dim=-1)
     
-    # hard clamp
-    nats = torch.tensor(1.0, device=q_log.device, dtype=q_log.dtype)
-    loss_representation_t = torch.max(loss_representation_t_raw, nats)
-    #loss_representation_t = loss_representation * beta 
-
-    # masking
+    loss_bt = kl_bt 
+    
     if mask is not None:
-        loss_representation_t = loss_representation_t * mask
-        loss_representation_t_raw = loss_representation_t_raw*mask
+        loss_bt = loss_bt * mask
         
-        
-        loss_representation = loss_representation_t.sum() / torch.clamp(mask.sum(), min=1.0)
-        loss_representation_raw = (loss_representation_t_raw.sum() / torch.clamp(mask.sum(), min=1.0)).detach().cpu().item()
-    else:
-        
-        loss_representation = loss_representation_t.mean()
-        loss_representation_raw = loss_representation_t_raw.mean().detach().cpu().item()
-    
-    loss_representation = loss_representation*beta
-
-    return loss_representation, loss_representation_t, loss_representation_raw
+    return loss_bt*beta # Shape [B, T]

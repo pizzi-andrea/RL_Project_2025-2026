@@ -1,22 +1,18 @@
 from pathlib import Path
 
-import gymnasium
 import lightning as L
 import numpy as np
 import torch
-import torchvision
 from torch import Tensor, nn
-from torchvision.transforms.functional import to_tensor, resize
+from timm.optim.laprop import LaProp
 
-from env_info import ButtonActionMapper, GamePad
 from ..world.Dreamer import Dreamer
 from .utils import *
-from vizdoom import gymnasium_wrapper
 from .Actor import Actor
 from .Critic import Critic
 
 class DreamerAgent(L.LightningModule):
-    def __init__(self, dreamer_model:Dreamer|str, bukets=255, action_space_dim:int=16, entropy_coef:int=0.0003,horizont:int=15, burn_in:int=3, lr=0.001):
+    def __init__(self, dreamer_model:Dreamer|str, bukets=255, action_space_dim:int=16, entropy_coef:int=0.0003,horizont:int=15, burn_in:int=3, lr=0.001, one_hot:bool=True):
         super().__init__()
         self.save_hyperparameters(ignore=["dreamer_model"])
         # import dreamer model or weigths
@@ -27,7 +23,7 @@ class DreamerAgent(L.LightningModule):
         
         
 
-        # obtain RSSM model
+        # -- obtain RSSM model
         self.rssm = self.dreamer_model.rssm
         self.entropy_coef = entropy_coef
         self.ema = EMAScalar()
@@ -40,27 +36,38 @@ class DreamerAgent(L.LightningModule):
         self.actor = Actor(dim_state=self.emb_dim, num_dist=action_space_dim)
         self.critic = Critic(dim_state=self.emb_dim, num_buckets=bukets)
 
-        
-
-        
     def setup(self, stage):
         
         self.dreamer_model.freeze_model()
     
-    def configure_optimizers(self):
-        return torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
+    def reparameterize_categorical(logits, tau=1.0):
+        
+        return F.gumbel_softmax(logits, tau=tau, hard=True)
+    
+    def reparameterize_bernoulli(logits):
+        probs = torch.sigmoid(logits)
+        sample = torch.bernoulli(probs)
+        return probs + (sample - probs).detach()
     
 
+    def configure_optimizers(self):
+        return LaProp(self.parameters(), lr=self.hparams.lr, eps=1e-6)
 
     def training_step(self, batch, batch_idx):
-        
+        # -- 
         obs     = batch["obs"][:, 0:self.burn_in]
         actions = batch["action"][:, 0:self.burn_in]
         user_att = batch["user_att"][:, 0:self.burn_in]
         mask     = batch["mask"][:, 0:self.burn_in]
+        mask_a   = batch["mask_action"]
 
-        output = self.forward(obs, actions, user_att, mask)
+        
+        if obs.dtype == torch.uint8:
+            obs = obs.float().div_(255.0).detach()
 
+        output = self.forward(obs, actions, user_att, mask, mask_a)
+
+        # -- 
         states_hat = output["imagination"]
         r_hat = output["rewards"]
         c_hat = output["continues"]
@@ -69,8 +76,8 @@ class DreamerAgent(L.LightningModule):
         log_probs = output["log_probs"]
         
 
-        if self.trainer.num_training_batches == batch_idx + 1:
-            self.trajectory_eval = states_hat[0, :]
+        #if self.trainer.num_training_batches == batch_idx + 1:
+        #    self.trajectory_eval = states_hat[0, :].cpu().detach()
         critic_log = self.critic(states_hat)
 
         with torch.no_grad():
@@ -90,20 +97,21 @@ class DreamerAgent(L.LightningModule):
         #print(td_error.shape)
         #print(value_symexp[:, :-1].shape)
         #exit()
-        actor_l = actor_loss(td_error, value_symexp[:, :-1], log_probs[:, :-1], entropy[:, :-1], self.ema)
+        actor_l = actor_loss(td_error, value_symexp[:, :-1], log_probs[:, :-1], entropy[:, :-1], self.ema, entropy_scale=self.entropy_coef)
         loss = critic_l + actor_l
         
         self.log_dict({
-            "train_loss": loss.detach().item(),
-            "actor_loss": actor_l.detach().item(),
-            "critic_loss": critic_l.detach().item(),
-            "lambda_return": td_error.mean().item(),
-            "mean_reward": r_hat.detach().mean().item()
+            "train_loss"    : loss.detach().item(),
+            "actor_loss"    : actor_l.detach().item(),
+            "critic_loss"   : critic_l.detach().item(),
+            "lambda_return" : td_error.mean().item(),
+            "mean_reward"   : r_hat.detach().mean().item(),
+            "entropy"       : entropy.detach().mean().item()
         }, prog_bar=True, on_step=True, on_epoch=True)
 
         return loss
         
-    def act(self, obs, att_user, old_act, rssm_state, eval_mode=False):
+    def act(self, obs, att_user, old_act, rssm_state):
         obs_t = obs.unsqueeze(0).unsqueeze(0)
         att_t = att_user.unsqueeze(0).unsqueeze(0)
 
@@ -118,10 +126,8 @@ class DreamerAgent(L.LightningModule):
         
         dist = self.actor(feature)
 
-        if eval_mode:
-            action = dist.mode
-        else:
-            action = dist.sample()
+        
+        action = dist.sample()
 
         action_numpy = action.squeeze(0).cpu().detach().numpy().astype(np.int32)
         return action_numpy, new_rssm_state
@@ -130,19 +136,15 @@ class DreamerAgent(L.LightningModule):
         pass
 
     def on_train_epoch_end(self):
-        
-        # img. test
-        with torch.no_grad():
+        pass
+        # --
+        #with torch.no_grad():
             
-            decoded_logits = self.dreamer_model.predict_obs(self.trajectory_eval)
-            video_path = Path(self.logger.log_dir).joinpath(f"train_dream_epoch_{self.current_epoch}.avi")
-            make_video(decoded_logits, video_path)
+            #decoded_logits = self.dreamer_model.predict_obs(self.trajectory_eval)
+            #video_path = Path(self.logger.log_dir).joinpath(f"train_dream_epoch_{self.current_epoch}.avi")
+            #make_video(decoded_logits, video_path, fps=30)
         
-        #TODO real test
-            
- 
-
-    def forward(self, obs, action, user_att, mask=None, rssm_state=None):
+    def forward(self, obs, action, user_att, mask=None, mask_actions=None, rssm_state=None):
         
         B, _, _, _, _ = obs.shape
         # -- encode attribute player with obs
@@ -155,7 +157,7 @@ class DreamerAgent(L.LightningModule):
             rssm_state = self.rssm.init_state(B, obs.device)
 
         
-        reward       = torch.zeros(B, self.horizont, device=obs.device)
+        reward        = torch.zeros(B, self.horizont, device=obs.device)
         continues     = torch.zeros(B, self.horizont, device=obs.device)
         entropys      = torch.zeros(B, self.horizont, device=obs.device)
         actions       = torch.zeros(B, self.horizont, action.shape[-1], device=obs.device)
@@ -171,7 +173,7 @@ class DreamerAgent(L.LightningModule):
                 rssm_state, _ = self.rssm.observe_step(rssm_state, action_t, enc_t, m)
             
         # -- immagination using rssm
-        for _ in range(self.horizont):
+        for t in range(self.horizont):
             embed = torch.cat([rssm_state.h, rssm_state.z], dim=-1)
             embed = self.dreamer_model.feat_proj(embed)
             latent_states[:,t] =embed
@@ -180,20 +182,16 @@ class DreamerAgent(L.LightningModule):
             cont = (self.dreamer_model.predict_continue(embed)).squeeze(-1)
             continues[:,t] = nn.functional.sigmoid(cont)
 
-            dist_a = self.actor(embed)
+            action, dist_a = self.actor(embed, mask_actions)
 
-            # -- reparametrization trick
-            action_s = dist_a.sample()
-            action = action_s + dist_a.base_dist.probs - dist_a.base_dist.probs.detach()
             entropys[:, t] = dist_a.entropy()
             actions[:, t] = action
-            log_probs[:, t] = dist_a.log_prob(action_s)
+            log_probs[:, t] = dist_a.log_prob(action)
 
             rssm_state, _ = self.rssm.imagine_step(rssm_state, action)
 
         
-        #print("value shape:", torch.stack(values, dim = 1).squeeze(-1).shape)
-        
+        # -- pack values
         return {
             "rewards"       : reward, 
             "continues"     : continues,
