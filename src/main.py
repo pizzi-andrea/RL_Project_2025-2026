@@ -81,26 +81,65 @@ def main():
                         persistent_workers=True)
         vae_valid_loader = DataLoader(DoomDataset(config["vae_config"]["VAE_dataset_path_valid"], resize=(config["global_config"]["img_size_h"],config["global_config"]["img_size_l"])), batch_size=config["vae_config"]["train_batch"], shuffle=False, num_workers=os.cpu_count()-1, persistent_workers=True,)
     
-        vae_model = VAE(latent_dim=config["vae_config"]["latent_dim"])
+        vae_model = VAE(latent_dim=config["vae_config"]["latent_dim"], model_dim=config["vae_config"]["model_dim"])
         vae_trainer.fit(vae_model, vae_train_loader, vae_valid_loader)
     
     if args.load_weights and Path(config["global_config"]["dreamer_w"]).exists():
         print(f"found Dreamer weights in {config["global_config"]["dreamer_w"]}")
-        rssm_model = Dreamer.load_from_checkpoint(config["global_config"]["dreamer_w"], vae=vae_model)
+        rssm_model = Dreamer.load_from_checkpoint(config["global_config"]["dreamer_w"],
+             # enviroments parameters
+                action_dim          =   config["global_config"]["action_shape"], 
+                att_dim             =   config["global_config"]["att_shape"], 
+                decode_shape        =   (config["global_config"]["img_channels"], config["global_config"]["img_size_h"], config["global_config"]["img_size_l"]),
+               
+                # train params
+                lr                  =   config["rssm_config"]["lr"],
+                # loss params
+                beta_dyn            =   config["rssm_config"]["beta_dyn"],
+                beta_pred           =   config["rssm_config"]["beta_pred"],
+                beta_rep            =   config["rssm_config"]["beta_rep"],
+                # encoder config
+                vae                 =   vae_model,
+                # RSSM params
+                burn_in             =    config["rssm_config"]["burn_in"],
+                free_nats           =   config["rssm_config"]["free_nats"],
+                unimix              =   config["rssm_config"]["unimix"],
+                internal_hidden_dim =   config["rssm_config"]["common_latent_dim"],
+                stoch_classes       =   config["rssm_config"]["stochastic_classes"],
+                stoch_latents       =   config["rssm_config"]["stochastic_latent"],
+                rssm_hidden_dim     =   config["rssm_config"]["rssm_latent_dim"],
+                h_dim               =   config["rssm_config"]["detterministic_latent_dim"]                  
+                                                  
+        
+        )
     else:
 
         rssm_model = Dreamer(
-                action_dim=config["global_config"]["action_shape"], 
-                att_dim=config["global_config"]["att_shape"], 
-                decode_shape=(config["global_config"]["img_channels"], config["global_config"]["img_size_h"], config["global_config"]["img_size_l"]),
-                lr=config["rssm_config"]["lr"],
-                beta_dyn=config["rssm_config"]["beta_dyn"],
-                beta_pred=config["rssm_config"]["beta_pred"],
-                beta_rep=config["rssm_config"]["beta_rep"],
-                vae=vae_model,
-                free_nats=config["rssm_config"]["free_nats"],
-                unimix=config["rssm_config"]["unimix"]
-        )  
+                # enviroments parameters
+                action_dim          =   config["global_config"]["action_shape"], 
+                att_dim             =   config["global_config"]["att_shape"], 
+                decode_shape        =   (config["global_config"]["img_channels"], config["global_config"]["img_size_h"], config["global_config"]["img_size_l"]),
+               
+                # train params
+                lr                  =   config["rssm_config"]["lr"],
+                # loss params
+                beta_dyn            =   config["rssm_config"]["beta_dyn"],
+                beta_pred           =   config["rssm_config"]["beta_pred"],
+                beta_rep            =   config["rssm_config"]["beta_rep"],
+                # encoder config
+                vae                 =   vae_model,
+                # RSSM params
+                burn_in             =    config["rssm_config"]["burn_in"],
+                free_nats           =   config["rssm_config"]["free_nats"],
+                unimix              =   config["rssm_config"]["unimix"],
+                internal_hidden_dim =   config["rssm_config"]["common_latent_dim"],
+                stoch_classes       =   config["rssm_config"]["stochastic_classes"],
+                stoch_latents       =   config["rssm_config"]["stochastic_latent"],
+                rssm_hidden_dim     =   config["rssm_config"]["rssm_latent_dim"],
+                h_dim               =   config["rssm_config"]["detterministic_latent_dim"]
+                
+        ) 
+    
 
     if args.load_weights and Path(config["global_config"]["policy_w"]).exists():
         print(f"found Policy weights in {config["global_config"]["policy_w"]}")
@@ -112,7 +151,12 @@ def main():
                     horizont=config["policy_config"]["horizont"],
                     burn_in=config["policy_config"]["burn_in"],
                     lr=config["policy_config"]["lr"],
-                    entropy_coef=config["policy_config"]["actor_entropy"]
+                    entropy_coef=config["policy_config"]["actor_entropy"],
+                    bukets=config["policy_config"]["buckets"],
+                    hidden_dim=config["policy_config"]["hidden_dim"],
+                    unimix=config["policy_config"]["unimix"],
+                    ema_decay=config["policy_config"]["ema_decay"],
+                    ema_epsilon=config["policy_config"]["ema_epsilon"],
         )
     
     envs = EnviromentAdapter(agent_model, DynamicDataAllocator(config["PER_config"]["cache"], PER4train))
@@ -183,10 +227,13 @@ def main():
         if (epoch > config["global_config"]["warmup"]):
             print("Collect new trajectorys ...")
             for env, n in zip(config["global_config"]["envs"], config["global_config"]["envs_episods"]):
-                reword = envs.act_in_env(env, n_episodes=n, frame_skip=4, max_length=config["global_config"]["max_episode_length"])
+                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=1, max_length=config["global_config"]["max_episode_length"])
                 print(f"mean reword collected by policy {reword} in env {env}")
+                print(f"Best episode: {best_path}")
         else:
             print("warmup ...")
+        
+
         
 
 

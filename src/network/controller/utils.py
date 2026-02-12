@@ -32,65 +32,61 @@ def symlog(x):
 
 import torch
 
-@no_grad
+import torch
+
+@torch.no_grad() 
 def lambda_returns(rewards, values, continues, gamma=0.997, lam=0.95):
     """
-    Computes Lambda-returns using GAE (General Advantage Estimation).
-    
-    Args:
-        rewards:   [Batch, Horizon]    (e.g., length 15 or 16)
-        values:    [Batch, Horizon+1]  (e.g., length 16: steps 0..14 + step 15 bootstrap)
-        continues: [Batch, Horizon]    (e.g., discount/non-terminal flags for each step)
-    
-    Returns:
-        lambda_returns: [Batch, Horizon] (Length 15, aligned with Action LogProbs)
+    Calcola i Lambda-returns. Gestisce input di lunghezza uguale [B, T].
+    Se len(values) == len(rewards), calcola T-1 ritorni (perde l'ultimo step).
     """
+    # rewards:   [B, T]
+    # values:    [B, T] oppure [B, T+1]
     
-    # Determine the effective horizon based on the provided Values.
-    # If values has 16 steps, we calculate returns for the first 15 steps.
-    batch_size, T_plus_1 = values.shape
-    horizon = T_plus_1 - 1 # If T_plus_1 is 16, horizon is 15
-    
-    # Slice rewards and continues to match the calculation horizon
-    # (Extract the first 15 steps)
-    rewards = rewards[:, :horizon]
-    continues = continues[:, :horizon]
-    
-    # Initialize Advantage buffer
-    advantages = torch.zeros_like(rewards)
-    last_gae_lam = 0
-    
-    # Backward Pass: t iterates from horizon-1 down to 0 (e.g., 14 to 0)
-    for t in reversed(range(horizon)):
-        # 1. Retrieve "Next Value" directly from the values array
-        # Since values has length 16, values[:, t+1] is always valid
-        # (For t=14, this accesses the bootstrap index 15)
-        next_val = values[:, t+1]
+    # 1. Gestione del disallineamento T vs T+1
+    if values.shape[1] == rewards.shape[1]:
+        # Se abbiamo tanti valori quanti reward, non possiamo calcolare
+        # il ritorno per l'ultimo reward perché manca il valore futuro (bootstrap).
+        # Quindi ignoriamo l'ultimo reward e calcoliamo returns per 0..T-2.
+        rewards = rewards[:, :-1]
+        continues = continues[:, :-1]
         
-        # 2. Retrieve current state value
-        curr_val = values[:, t]
-        
-        # 3. Continuation mask (1.0 - done)
-        # continues[:, t] indicates if the transition from t to t+1 is valid
-        next_non_terminal = continues[:, t]
+        # values[:, :-1] sono i V(s_t) per t=0..T-2
+        # values[:, 1:]  sono i V(s_{t+1}) per t=0..T-2 (che funge da bootstrap)
+        v_pred = values[:, :-1]
+        next_val = values[:, 1:]
+    else:
+        # Caso standard: values ha un elemento in più (bootstrap esplicito)
+        # rewards: [B, T], values: [B, T+1]
+        v_pred = values[:, :-1]
+        next_val = values[:, 1:]
 
-        # 4. Compute TD Error (delta)
-        # delta = r_t + gamma * v_{t+1} * mask - v_t
-        delta = rewards[:, t] + gamma * next_val * next_non_terminal - curr_val
-        
-        # 5. Recursive GAE Update
-        # A_t = delta + (gamma * lambda * mask) * A_{t+1}
-        last_gae_lam = delta + gamma * lam * next_non_terminal * last_gae_lam
-        
-        # Store the calculated advantage
-        advantages[:, t] = last_gae_lam
-        
-    # 6. Final Calculation: Lambda Returns = Advantages + Values
-    # R_t = A_t + V_t
-    targets = advantages + values[:, :horizon]
+    batch_size, horizon = rewards.shape
     
-    # Detach from graph as these are targets for the Critic/Actor
-    return targets.detach()
+    # Inizializza buffer
+    last_gae = torch.zeros(batch_size, device=rewards.device)
+    returns_list = []
+    
+    # Backward Pass
+    for t in reversed(range(horizon)):
+        r_t = rewards[:, t]
+        c_t = continues[:, t]
+        v_next = next_val[:, t]   # V(s_{t+1})
+        v_curr = v_pred[:, t]     # V(s_t)
+        
+        # Delta TD
+        delta = r_t + gamma * c_t * v_next - v_curr
+        
+        # GAE
+        last_gae = delta + gamma * lam * c_t * last_gae
+        
+        # Lambda Return = Advantage + Value
+        result_t = last_gae + v_curr
+        
+        returns_list.insert(0, result_t)
+        
+    targets = torch.stack(returns_list, dim=1)
+    return targets
 
 
 
@@ -135,8 +131,9 @@ def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, e
                 print(f"Log Probs:        Mean={action_log_prob.mean().item():.4f}")
                 print(f"Entropy:          Mean={entropy.mean().item():.4f}")
         # --- DEBUG BLOCK END ---
-
-    return loss
+    ema_scale = s.detach().cpu().numpy().mean()
+    
+    return loss, ema_scale
 
 def critic_loss(critic_log, target_log, limit=20.0, buckets=255):
     # target_log: [Batch, 15]

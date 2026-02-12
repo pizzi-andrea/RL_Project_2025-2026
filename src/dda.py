@@ -58,3 +58,5 @@ class DynamicDataAllocator:
         self.buffer.store(save_path, True)
 
         episode.clear()
+
+        return save_path

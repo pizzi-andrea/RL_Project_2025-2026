@@ -12,7 +12,7 @@ from .Actor import Actor
 from .Critic import Critic
 
 class DreamerAgent(L.LightningModule):
-    def __init__(self, dreamer_model:Dreamer|str, bukets=255, action_space_dim:int=16, entropy_coef:int=0.0003,horizont:int=15, burn_in:int=3, lr=0.001, one_hot:bool=True):
+    def __init__(self, dreamer_model:Dreamer|str, bukets=255, action_space_dim:int=16, entropy_coef:int=0.0003,horizont:int=15, burn_in:int=3, unimix:float= 0.01, ema_decay:float= 0.98, ema_epsilon:float= 1e-6, lr=0.001, hidden_dim:int=1024, one_hot:bool=True):
         super().__init__()
         self.save_hyperparameters(ignore=["dreamer_model"])
         # import dreamer model or weigths
@@ -26,15 +26,15 @@ class DreamerAgent(L.LightningModule):
         # -- obtain RSSM model
         self.rssm = self.dreamer_model.rssm
         self.entropy_coef = entropy_coef
-        self.ema = EMAScalar()
+        self.ema = EMAScalar(ema_decay, ema_epsilon)
         self.emb_dim = self.dreamer_model.internal_hidden_dim
         self.action_space_dim = action_space_dim
         self.horizont = horizont
         self.burn_in = burn_in
         
         
-        self.actor = Actor(dim_state=self.emb_dim, num_dist=action_space_dim)
-        self.critic = Critic(dim_state=self.emb_dim, num_buckets=bukets)
+        self.actor = Actor(dim_state=self.emb_dim, num_dist=action_space_dim, unimix=unimix, hidden_dim=1024)
+        self.critic = Critic(dim_state=self.emb_dim, num_buckets=bukets, hidden_dim=hidden_dim)
 
     def setup(self, stage):
         
@@ -51,7 +51,7 @@ class DreamerAgent(L.LightningModule):
     
 
     def configure_optimizers(self):
-        return LaProp(self.parameters(), lr=self.hparams.lr, eps=1e-6)
+        return LaProp(self.parameters(), lr=self.hparams.lr, eps=1e-20)
 
     def training_step(self, batch, batch_idx):
         # -- 
@@ -69,7 +69,7 @@ class DreamerAgent(L.LightningModule):
 
         # -- 
         states_hat = output["imagination"]
-        r_hat = output["rewards"]
+        r_hat = output["rewards"] # in symlog
         c_hat = output["continues"]
         a_hat = output["actions"]
         entropy = output["entropy"]
@@ -84,29 +84,36 @@ class DreamerAgent(L.LightningModule):
             critic_prob = torch.softmax(critic_log, dim=-1)
             value_symlog = (critic_prob * self.critic.buckets).sum(-1)
             value_symexp = torch.sign(value_symlog) * (torch.exp(torch.abs(value_symlog)) - 1)
+            r_hat_symexp = torch.sign(r_hat) * (torch.exp(torch.abs(r_hat)) - 1)
         
-        td_error = lambda_returns(
-            rewards=r_hat,
+        lambda_return = lambda_returns(
+            rewards=r_hat_symexp,
             values=value_symexp,
             continues=c_hat
         )
         actions = torch.round(a_hat).detach()
         
-        critic_l = critic_loss(critic_log[:, :-1], td_error, buckets=self.critic.num_buckets)
+        critic_l = critic_loss(critic_log[:, :-1], lambda_return, buckets=self.critic.num_buckets)
         #print(critic_log.shape)
         #print(td_error.shape)
         #print(value_symexp[:, :-1].shape)
         #exit()
-        actor_l = actor_loss(td_error, value_symexp[:, :-1], log_probs[:, :-1], entropy[:, :-1], self.ema, entropy_scale=self.entropy_coef)
+        actor_l, ema_scale = actor_loss(lambda_return, value_symexp[:, :-1], log_probs[:, :-1], entropy[:, :-1], self.ema, entropy_scale=self.entropy_coef)
+        
+        weight = torch.cumprod(c_hat, dim=1).detach()
+        weight = torch.cat([torch.ones_like(weight[:, :1]), weight[:, :-1]], dim=1) # Shift right
+        
+        actor_l = (actor_l * weight[:, :-1]).mean()
         loss = critic_l + actor_l
         
         self.log_dict({
             "train_loss"    : loss.detach().item(),
             "actor_loss"    : actor_l.detach().item(),
             "critic_loss"   : critic_l.detach().item(),
-            "lambda_return" : td_error.mean().item(),
+            "lambda_return" : lambda_return.mean().item(),
             "mean_reward"   : r_hat.detach().mean().item(),
-            "entropy"       : entropy.detach().mean().item()
+            "entropy"       : entropy.detach().mean().item(),
+            "ema_scale"     : ema_scale
         }, prog_bar=True, on_step=True, on_epoch=True)
 
         return loss
@@ -165,13 +172,20 @@ class DreamerAgent(L.LightningModule):
         latent_states = torch.zeros(B, self.horizont, self.emb_dim, device=obs.device)
         
         # -- burn-in rssm initialization
+        burn_in = self.burn_in if self.training else 0
         with torch.no_grad():
-            for t in range(self.burn_in):
+            for t in range(burn_in):
                 enc_t = enc[:, t]
                 action_t = action[:, t]
                 m = mask[:, t]
                 rssm_state, _ = self.rssm.observe_step(rssm_state, action_t, enc_t, m)
-            
+        z = rssm_state.z.detach()
+        h = rssm_state.h.detach()
+        z_log = rssm_state.z_logits.detach()
+
+        rssm_state.z = z
+        rssm_state.h = h 
+        rssm_state.z_logits = z_log
         # -- immagination using rssm
         for t in range(self.horizont):
             embed = torch.cat([rssm_state.h, rssm_state.z], dim=-1)

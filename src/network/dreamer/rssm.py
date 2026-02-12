@@ -55,6 +55,7 @@ class RSSM(nn.Module): # need specific train loop
         :type unimix: float
         """
         super().__init__()
+        
         self.action_dim = action_dim
         self.deter_dim = deter_dim
         self.L = stoch_latents
@@ -92,7 +93,7 @@ class RSSM(nn.Module): # need specific train loop
         )
         # posterior logits observation + memory
         self.post_net = nn.Sequential(
-            nn.Linear(deter_dim + embed_dim, deter_dim),
+            nn.Linear(deter_dim + obs_dim, deter_dim),
             nn.RMSNorm(deter_dim),
             nn.SiLU(),
             nn.Linear(deter_dim, self.output_dimension),

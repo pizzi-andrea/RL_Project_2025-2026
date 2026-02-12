@@ -7,7 +7,7 @@ from torch import no_grad
 from env_info import GamePad
 from dda import DynamicDataAllocator
 from globals import *
-
+from math import inf
 from vizdoom import gymnasium_wrapper
 import gymnasium
 
@@ -21,8 +21,11 @@ class EnviromentAdapter:
         self.gamepad = GamePad()
 
     def reset_memory_agent(self):
-         self.memory = self.agent.dreamer_model.rssm.init_state(1, self.device)
-
+        # Inizializza lo stato e assicurati che sia staccato dal grafo precedente
+        self.memory = self.agent.dreamer_model.rssm.init_state(1, self.device)
+        # Suggerimento: svuota la cache CUDA se necessario
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     @no_grad
     def act(self, obs:np.ndarray, user_att:list[float], action, mask_actions=None, local_act_order:list[str]=[]):
         self.gamepad.reset()
@@ -43,38 +46,40 @@ class EnviromentAdapter:
         
         # Campionamento One-Hot (Differenziabile o stocastico a seconda dell'Actor)
         one_hot_action = dist_actions.sample().squeeze(0) # [Global_Dim]
-        
-        
+        #print(mask_actions)
+        #print(one_hot_action.shape)
         # Otteniamo l'indice globale scelto dall'Actor
+        #print(one_hot_action)
         global_action_idx = torch.argmax(one_hot_action, dim=-1).item()
-
+        #print(global_action_idx)
+        #print(mask_actions)
         # GLOBAL_BUTTONS deve essere la lista completa di riferimento del tuo progetto
         GLOBAL_BUTTONS = DoomNames.buttons_names # Esempio
         
         # Identifichiamo il nome del bottone corrispondente all'indice globale
         selected_button_name = GLOBAL_BUTTONS[global_action_idx]
-        
+        #print(selected_button_name)
         # Cerchiamo la posizione di quel nome nella lista locale dell'ambiente attuale
-        try:
-            local_action_idx = local_act_order.index(selected_button_name)
-        except ValueError:
-            # Fallback di sicurezza: se l'actor sceglie un'azione non valida per errore di masking
-            print(f"Warning: Actor selected {selected_button_name} not in local_act_order")
-            local_action_idx = 0
+        local_action_idx = local_act_order.index(selected_button_name)
+        
 
         return local_action_idx, one_hot_action
     
     @no_grad
-    def act_in_env(self, enviroment_id:str, n_episodes:int=1, frame_skip:int=1, max_length:int=500):
+    def act_in_env(self, enviroment_id:str, n_episodes:int=1, frame_skip:int=1, max_length:int=500, multibinary:bool=False):
         
         print(f"current env {enviroment_id}")
         env = gymnasium.make(enviroment_id, render_mode="rgb_array", max_buttons_pressed=1, frame_skip=frame_skip, max_episode_steps=max_length)
         #action_mapper = ButtonActionMapper.from_env(env)
-        
+        best_episode = -inf
+        best_path = ""
         
         
         local_stat_name    = [v.name for v in env.unwrapped.game.get_available_game_variables()]
-        local_buttons_name = [b.name for b in env.unwrapped.game.get_available_buttons()]
+        
+        local_buttons_name = ['NO-OPP'] + [b.name for b in env.unwrapped.game.get_available_buttons()]
+        if multibinary:
+            local_buttons_name.pop(0)
         
         # Buffer temporaneo per l'episodio corrente
         current_episode_buffer = []
@@ -100,11 +105,24 @@ class EnviromentAdapter:
             done = False
             total_reward = 0
             local_action = env.action_space.sample()
+            act = OrderedDict()
             step_count = 0 # Contatore locale per l'episodio
             
             while not done:
-                act = DoomMap.local2global(local_action, local_buttons_name, DoomNames.buttons_names)
-                att = DoomMap.local2global(game_info, local_stat_name, DoomNames.att_player_names, False)
+                if not multibinary:
+                    global_idx = DoomMap.reindex_categorical(local_buttons_name[local_action], DoomNames.buttons_names)
+                    act_one_hot = DoomMap.one_hot(global_idx, n_classes=len(DoomNames.buttons_names))
+                else:
+                    act_one_hot = local_action
+                
+
+                
+                for n, v in zip(DoomNames.buttons_names, act_one_hot):
+                    act[n] = v
+                
+                att = OrderedDict.fromkeys(DoomNames.att_player_names, 0)
+                for a, n in zip(game_info, local_stat_name):
+                    att[n] = a
 
                 
                 
@@ -143,12 +161,17 @@ class EnviromentAdapter:
                
              
             # Fine episodio: salva tramite memory manager
-            self.memory_m.alloc_episode(current_episode_buffer, **{"mask": act_mask})
+            episode_path = self.memory_m.alloc_episode(current_episode_buffer, **{"mask": act_mask})
             
             current_episode_buffer.clear() # Pulisci la lista per il prossimo episodio
             episode_rewards.append(total_reward)
             
             print(f"Episode {episode+1}/{n_episodes} finished. Reward: {total_reward}")
+            if total_reward > best_episode:
+                best_path = episode_path
+
+
         
         env.close()
-        return np.mean(episode_rewards).item()
+        self.reset_memory_agent()
+        return np.mean(episode_rewards).item(), best_path

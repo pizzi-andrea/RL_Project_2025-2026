@@ -29,6 +29,7 @@ class Dreamer(L.LightningModule):
         stoch_latents: int = 32,
         stoch_classes: int = 32,
         decode_shape: tuple[int,int,int] = (3, 120,160),
+        burn_in:int= 10,
         lr: float = 3e-4,
         beta_pred: float = 1.0,
         beta_dyn: float = 1.0,
@@ -57,7 +58,7 @@ class Dreamer(L.LightningModule):
 
         rssm_feat_dim = h_dim + (stoch_latents * stoch_classes) # h_dim + L*K
         self.internal_hidden_dim  = internal_hidden_dim
-        
+        self.burn_in = burn_in
 
         
             
@@ -138,7 +139,7 @@ class Dreamer(L.LightningModule):
         cont_hat = out["c_logits"]
         user_att_hat = out["att_hat"]
    
-        l_pred_bt = loss_prediction(obs_hat, obs, 
+        l_pred_bt, components = loss_prediction(obs_hat, obs, 
                                     rewards_hat, rewards, 
                                     cont_hat,cont, 
                                     user_att_hat, user_att, 
@@ -161,14 +162,14 @@ class Dreamer(L.LightningModule):
         
       
         valid_steps = mask.sum(dim=1).clamp(min=1.0) # [B]
-        loss_batch = loss_total_bt.sum(dim=1) / valid_steps # [B]
+        loss_batch = loss_total_bt.sum(dim=-1) / valid_steps # [B]
         
-        
-        components = {
-            "KL_divergence"  : l_kl.sum().item() / mask.sum().item(),
-            "prediction_loss": l_pred_bt.sum().item() / mask.sum().item(), 
-            "dynamic_loss":    l_dyn_bt.sum().item()  / mask.sum().item(),
-            "representation_loss": l_rep_bt.sum().item() / mask.sum().item(),
+        valid_batch = mask.detach().cpu().numpy().sum()
+        components |= {
+            "KL_divergence"  : l_kl.detach().cpu().numpy().sum() / valid_batch,
+            "prediction_loss": l_pred_bt.detach().cpu().numpy().sum() / valid_batch, 
+            "dynamic_loss":    l_dyn_bt.detach().cpu().numpy().sum()  / valid_batch,
+            "representation_loss": l_rep_bt.detach().cpu().numpy().sum() / valid_batch,
         }
         
         return loss_batch, components
@@ -186,7 +187,7 @@ class Dreamer(L.LightningModule):
     
     def configure_optimizers(self):
         
-        return LaProp(self.parameters(), self.hparams.lr, eps=1e-6)
+        return LaProp(self.parameters(), self.hparams.lr, eps=1e-20)
     
     def encode(self, obs, user_att):
         enc = self.encoder(obs)
@@ -216,7 +217,30 @@ class Dreamer(L.LightningModule):
 
         # -- init memory
         state = self.rssm.init_state(B, device=obs.device)
+        burn_in = self.burn_in if self.training else 0
+        
+        
+        with torch.no_grad():
+            for t in range(burn_in):
+                a_t = actions[:, t]
+                att = att_user[:, t]
+                m = mask[:, t]
+                
+                # Encoding dell'osservazione
+                x_t = self.encode(obs[:, t], att)
+                
+                # Step RSSM (aggiorna solo lo stato)
+                state, _ = self.rssm.observe_step(state, a_t, x_t, m)
+        
+        z = state.z.detach()
+        h = state.h.detach()
+        z_log = state.z_logits.detach()
 
+        state.z = z
+        state.h = h 
+        state.z_logits = z_log
+       
+        
         # -- store temp data
         post_h, post_z, post_logits, prior_logits = [], [], [], []
         
@@ -265,6 +289,12 @@ class Dreamer(L.LightningModule):
             "episods_idx":idx_episods, 
             "episods_loss":loss_episods
         }
+    def on_after_backward(self):
+        # 1. Applica AGC
+        AGC(self.parameters(), clip_factor=0.01)
+        
+        # security clip
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 100.0)
     
     def validation_step(self, batch, batch_idx):
         obs = batch["obs"]
@@ -279,7 +309,7 @@ class Dreamer(L.LightningModule):
         loss = (loss_batch * weights).mean()
         
         #self.log_dict(components, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("validation_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log("validation_loss", loss, prog_bar=True, on_step=True, on_epoch=False)
         
         self._log_validation_images(batch["obs"], out["x_hat"])
             
@@ -297,10 +327,9 @@ class Dreamer(L.LightningModule):
     def training_step(self, batch, batch_idx):
         
         priority_idx = batch["priority_idx"].detach().cpu().numpy()
+        
         obs = batch["obs"]
-
-        if obs.dtype == torch.uint8:
-            batch["obs"] = obs.float().div_(255.0).detach()
+        batch["obs"] = obs.float().div_(255.0).detach()
         
         out = self.forward(batch["obs"], batch["action"], batch["user_att"], batch["mask"])
         
@@ -309,8 +338,8 @@ class Dreamer(L.LightningModule):
         weights = batch["weight"]
         loss = (loss_batch * weights).mean()
         
-        self.log_dict(components,    prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log_dict(components,    prog_bar=False, on_step=True, on_epoch=False)
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=False)
 
         #print(f"--- DEBUG STEP {self.global_step} ---")
         #print(f"Obs Range: min={batch['obs'].min()}, max={batch['obs'].max()}")
