@@ -12,7 +12,8 @@ from dda import DynamicDataAllocator
 from env_adapter import EnviromentAdapter
 from network.controller.Policy import DreamerAgent
 from network.encoder.VAE import VAE
-from network.world.Dreamer import Dreamer, PERAdapter
+from network.worldModel.dreamer import Dreamer
+from network.adapters import PERAdapter
 from priority_functions import (
     AdversarialReplayPriority,
     CountBasedPriority,

@@ -6,7 +6,7 @@ import torchvision
 import lightning as L
 
 class VAE(L.LightningModule):
-    def __init__(self, latent_dim: int, model_dim: int = 512):
+    def __init__(self, latent_dim: int, model_dim: int = 512, unimix:float=0.01):
         """
         VAE compliant with DreamerV3 Model Sizes.
         

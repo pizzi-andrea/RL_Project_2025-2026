@@ -2,7 +2,7 @@ import numpy as np
 from typing import Any
 
 class SumTree:
-    """SumTree buffer for PER algorithm"""
+    """SumTree data structure"""
     def __init__(self, size:int) -> None:
         self.size = size
         
@@ -86,6 +86,7 @@ class SumTree:
         return self.priority[node]
 
     def update_priority(self, start_leaf:int, new_priority:float) -> None:
+        """given leaf index and new priority value assign new apriority at indexs"""
         if self.is_leaf(start_leaf):
             self.priority[start_leaf] = new_priority
             self._update(start_leaf)
@@ -97,7 +98,7 @@ class SumTree:
         return self.capacity
 
     def get_transition(self, sum:float) -> tuple[Any, int, int]:
-        
+        """Exstract batch of data from buffer using tratifyed sampling"""
         sum_max = self.priority[0]
         sum = min(sum, sum_max - 1e-4)
         current_idx = 0

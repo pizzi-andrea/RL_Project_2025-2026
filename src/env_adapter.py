@@ -4,7 +4,6 @@ import cv2 as cv
 import torchvision.transforms.functional as F
 from network.controller.Policy import DreamerAgent
 from torch import no_grad
-from env_info import GamePad
 from dda import DynamicDataAllocator
 from globals import *
 from math import inf
@@ -18,7 +17,7 @@ class EnviromentAdapter:
         self.memory_m = memory_manager
         
         self.memory = agent.dreamer_model.rssm.init_state(1, self.device)
-        self.gamepad = GamePad()
+        #self.gamepad = GamePad()
 
     def reset_memory_agent(self):
         # Inizializza lo stato e assicurati che sia staccato dal grafo precedente
@@ -28,7 +27,7 @@ class EnviromentAdapter:
             torch.cuda.empty_cache()
     @no_grad
     def act(self, obs:np.ndarray, user_att:list[float], action, mask_actions=None, local_act_order:list[str]=[]):
-        self.gamepad.reset()
+        #self.gamepad.reset()
         
         frame = F.to_tensor(cv.resize(obs, (160,120))).to(dtype=torch.float32).unsqueeze(0) 
         mask_actions = torch.asarray(mask_actions, dtype=torch.bool).unsqueeze(0) 

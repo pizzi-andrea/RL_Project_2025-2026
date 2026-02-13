@@ -1,10 +1,10 @@
 import pandas as pd
 import torch
+import numpy as np
 from pathlib import Path
 from collections import deque
 from shutil import rmtree
-from env_info import ATT_PLAYER
-from tofolder import *
+
 
 class DynamicDataAllocator:
     """

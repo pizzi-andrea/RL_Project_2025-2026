@@ -1,21 +1,23 @@
-from pathlib import Path
+
 
 import lightning as L
 import numpy as np
 import torch
-from torch import Tensor, nn
-from timm.optim.laprop import LaProp
 
-from ..world.Dreamer import Dreamer
+from torch import nn
+from timm.optim.laprop import LaProp
+from ..worldModel.dreamer import Dreamer
 from .utils import *
 from .Actor import Actor
 from .Critic import Critic
 
 class DreamerAgent(L.LightningModule):
+    """Agent based on Dreamer model"""
     def __init__(self, dreamer_model:Dreamer|str, bukets=255, action_space_dim:int=16, entropy_coef:int=0.0003,horizont:int=15, burn_in:int=3, unimix:float= 0.01, ema_decay:float= 0.98, ema_epsilon:float= 1e-6, lr=0.001, hidden_dim:int=1024, one_hot:bool=True):
         super().__init__()
         self.save_hyperparameters(ignore=["dreamer_model"])
         # import dreamer model or weigths
+        
         if isinstance(dreamer_model, str):
             self.dreamer_model = Dreamer.load_from_checkpoint(dreamer_model)
         else:
@@ -23,87 +25,106 @@ class DreamerAgent(L.LightningModule):
         
         
 
-        # -- obtain RSSM model
+        # -- configure hyper-parameters
         self.rssm = self.dreamer_model.rssm
         self.entropy_coef = entropy_coef
-        self.ema = EMAScalar(ema_decay, ema_epsilon)
-        self.emb_dim = self.dreamer_model.internal_hidden_dim
         self.action_space_dim = action_space_dim
         self.horizont = horizont
         self.burn_in = burn_in
+
+        # -- define EMA scaler (Mobile mean)
+        self.ema = EMAScalar(ema_decay, ema_epsilon)
+        self.emb_dim = self.dreamer_model.internal_hidden_dim
         
         
+        
+        # -- Define Actor-critic Structure
         self.actor = Actor(dim_state=self.emb_dim, num_dist=action_space_dim, unimix=unimix, hidden_dim=1024)
         self.critic = Critic(dim_state=self.emb_dim, num_buckets=bukets, hidden_dim=hidden_dim)
 
     def setup(self, stage):
-        
+        """Disable network gradients (different by evaluation mode!)"""
         self.dreamer_model.freeze_model()
     
     def reparameterize_categorical(logits, tau=1.0):
-        
+        """Reparametrization trick for OneHot categorical sampling"""
         return F.gumbel_softmax(logits, tau=tau, hard=True)
     
     def reparameterize_bernoulli(logits):
+        """Reparametrization trick for Bernoullie sampling"""
         probs = torch.sigmoid(logits)
         sample = torch.bernoulli(probs)
         return probs + (sample - probs).detach()
     
 
     def configure_optimizers(self):
+        # def parameters
+        #   lr: 0.00003
+        #   eps: 1e-20
         return LaProp(self.parameters(), lr=self.hparams.lr, eps=1e-20)
 
     def training_step(self, batch, batch_idx):
-        # -- 
+        """Dreamer traning procedure (burn in + dreamer)"""
+        
+        # -- unpack data
         obs     = batch["obs"][:, 0:self.burn_in]
         actions = batch["action"][:, 0:self.burn_in]
         user_att = batch["user_att"][:, 0:self.burn_in]
         mask     = batch["mask"][:, 0:self.burn_in]
         mask_a   = batch["mask_action"]
 
-        
+        # normalize and convert standard image in float32 tensor
         if obs.dtype == torch.uint8:
             obs = obs.float().div_(255.0).detach()
 
+        # generate new immaginary trajectory using rssm model
         output = self.forward(obs, actions, user_att, mask, mask_a)
 
-        # -- 
+        # -- unpack output
         states_hat = output["imagination"]
-        r_hat = output["rewards"] # in symlog
+        r_hat= output["rewards"] # in twohot
         c_hat = output["continues"]
-        a_hat = output["actions"]
+        #a_hat = output["actions"]
         entropy = output["entropy"]
-        log_probs = output["log_probs"]
+        a_hat_log_probs = output["log_probs"]
         
 
-        #if self.trainer.num_training_batches == batch_idx + 1:
-        #    self.trajectory_eval = states_hat[0, :].cpu().detach()
-        critic_log = self.critic(states_hat)
+        # -- critic: estimate expected values and lambda-return
+        v_hat_log, v_hat = self.critic(states_hat)
 
-        with torch.no_grad():
-            critic_prob = torch.softmax(critic_log, dim=-1)
-            value_symlog = (critic_prob * self.critic.buckets).sum(-1)
-            value_symexp = torch.sign(value_symlog) * (torch.exp(torch.abs(value_symlog)) - 1)
-            r_hat_symexp = torch.sign(r_hat) * (torch.exp(torch.abs(r_hat)) - 1)
+        # r_hat and v_hat are just in same scales and encoding with twohot method
         
         lambda_return = lambda_returns(
-            rewards=r_hat_symexp,
-            values=value_symexp,
+            rewards=r_hat,
+            values=v_hat,
             continues=c_hat
         )
-        actions = torch.round(a_hat).detach()
         
-        critic_l = critic_loss(critic_log[:, :-1], lambda_return, buckets=self.critic.num_buckets)
-        #print(critic_log.shape)
-        #print(td_error.shape)
-        #print(value_symexp[:, :-1].shape)
-        #exit()
-        actor_l, ema_scale = actor_loss(lambda_return, value_symexp[:, :-1], log_probs[:, :-1], entropy[:, :-1], self.ema, entropy_scale=self.entropy_coef)
+        # encode target using twohot function for loss
+        with torch.no_grad():
+            two_hot_lambda_return = twohot(lambda_return, self.critic.buckets)
         
-        weight = torch.cumprod(c_hat, dim=1).detach()
-        weight = torch.cat([torch.ones_like(weight[:, :1]), weight[:, :-1]], dim=1) # Shift right
         
-        actor_l = (actor_l * weight[:, :-1]).mean()
+        # -- evaluate critic respect lambda return in twohot encoding
+        critic_l = critic_loss(
+            v_hat_log[:, :-1], 
+            two_hot_lambda_return, 
+            continues=c_hat[:, :-1]
+        )
+        
+        # -- compute actor loss respect lambda_return and v_hat not in twohot encoding
+        actor_l, ema_scale = actor_loss(
+            lambda_return, 
+            v_hat[:, :-1], 
+            a_hat_log_probs[:, :-1], 
+            entropy[:, :-1], 
+            self.ema, 
+            entropy_scale=self.entropy_coef,
+            continues=c_hat[:, :-1]
+        )
+        
+        # -- ignore terminated steps
+
         loss = critic_l + actor_l
         
         self.log_dict({

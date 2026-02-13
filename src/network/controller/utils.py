@@ -27,12 +27,51 @@ class EMAScalar(nn.Module):
 
         return self.scale
 
+
 def symlog(x):
     return torch.sign(x) * torch.log(torch.abs(x) + 1.0)
 
-import torch
 
-import torch
+def symexp(x):
+    return torch.sign(x)*(torch.exp(torch.abs(x)) - 1)
+
+@torch.no_grad()
+def twohot(x, B):
+    """
+    x: Target scalari (es. lambda-returns), shape [...]
+    B: Centri dei bin (già in scala symexp), shape [N]
+    returns: Vettore two-hot, shape [..., N]
+    """
+    # 1. Trova l'indice k: numero di bin b_j < x (Formula 12)
+    # x.unsqueeze(-1) permette il confronto broadcast tra [..., 1] e [N]
+    k = torch.sum(B < x.unsqueeze(-1), dim=-1) # Shape [...]
+    
+    # 2. Clipping degli indici per evitare Out-of-Bounds
+    # k deve essere compreso tra 1 e N-1 per poter accedere a b_k e b_{k+1}
+    # (Nota: nella formula k e k+1 sono indici 1-based, qui usiamo 0-based)
+    k = torch.clamp(k, 1, B.size(0) - 1)
+    
+    # 3. Recupera i valori dei bin b_k e b_{k+1}
+    b_k = B[k - 1]
+    b_k1 = B[k]
+    
+    # 4. Calcola i pesi (Formula 12)
+    # w_k = |b_{k+1} - x| / |b_{k+1} - b_k|
+    # w_k1 = |b_k - x| / |b_{k+1} - b_k|
+    denom = b_k1 - b_k
+    w_k = (b_k1 - x) / denom
+    w_k1 = (x - b_k) / denom
+    
+    # 5. Costruzione del vettore di output
+    out = torch.zeros(*x.shape, B.size(0), device=x.device)
+    
+    # Usiamo scatter per posizionare i pesi negli indici corretti
+    # out.scatter_(dim, index, value)
+    out.scatter_(-1, (k - 1).unsqueeze(-1), w_k.unsqueeze(-1))
+    out.scatter_(-1, k.unsqueeze(-1), w_k1.unsqueeze(-1))
+    
+    # 6. Clipping finale dei pesi tra 0 e 1 (per valori di x fuori dal range dei bin)
+    return torch.clamp(out, 0, 1)
 
 @torch.no_grad() 
 def lambda_returns(rewards, values, continues, gamma=0.997, lam=0.95):
@@ -112,12 +151,16 @@ def make_video(frames, output_path, fps=30):
 
 
 
-def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, entropy_scale=3e-4, debug=False):
+def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, continues, entropy_scale=3e-4, debug=False):
     advantages = td_return - critic_values
     s = ema_scaler(td_return)
     scaled_advantages = (advantages / torch.clamp(s, min=1.0)).detach()
 
-    loss = -(scaled_advantages*action_log_prob + entropy_scale*entropy).mean()
+    loss = -(scaled_advantages*action_log_prob + entropy_scale*entropy) * continues
+
+    # scale loss respect only valid steps
+    total_valid_steps = continues.sum()
+    final_loss = loss.sum() / torch.clamp(total_valid_steps, min=1.0)
 
     # --- DEBUG BLOCK START ---
     if debug:
@@ -133,39 +176,20 @@ def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, e
         # --- DEBUG BLOCK END ---
     ema_scale = s.detach().cpu().numpy().mean()
     
-    return loss, ema_scale
+    return final_loss, ema_scale
 
-def critic_loss(critic_log, target_log, limit=20.0, buckets=255):
-    # target_log: [Batch, 15]
-    # critic_log: [Batch, 15, 255]
-    
-    target_sym = symlog(target_log)
-    
-    # Compute bucket width
-    bucket_width = (limit * 2) / (buckets - 1)
-    
-    # Project target values into bucket space [0, buckets-1]
-    buckets_cont = (target_sym + limit) / bucket_width
+def symlog_loss(pred_symlog, real_symlog):
+    """Evaluate the network capacity to predict target value directly in symlog scale"""
+    return 0.5*torch.pow((pred_symlog - real_symlog), 2)
 
-    # Find high-low bucket indices
-    lower = buckets_cont.floor().long().clamp(0, buckets - 1)
-    upper = buckets_cont.ceil().long().clamp(0, buckets - 1)
+def critic_loss(v_hat, target, continues):
 
-    # Compute weights for the two-hot encoding
-    upper_w = buckets_cont - lower.float()
-    lower_w = 1.0 - upper_w
+    log_probs = torch.nn.functional.log_softmax(v_hat, dim=-1)   
+    per_step_loss = -(target * log_probs).sum(dim=-1)    
+    masked_loss = per_step_loss * continues
+    total_valid_steps = continues.sum()
+    final_loss = masked_loss.sum() / torch.clamp(total_valid_steps, min=1.0)
 
-    # Create the target distribution (same shape as critic_log)
-    target_probs = torch.zeros_like(critic_log)
+    return final_loss
 
-    # Apply weights using scatter_add
-    # We need to unsqueeze indices to match the last dimension of target_probs
-    target_probs.scatter_add_(-1, lower.unsqueeze(-1), lower_w.unsqueeze(-1))
-    target_probs.scatter_add_(-1, upper.unsqueeze(-1), upper_w.unsqueeze(-1))
-    
-    # Cross entropy between predicted logits and two-hot target distribution
-    # Ensure critic_log is passed as logits for F.cross_entropy or use log_softmax
-    loss = -torch.sum(target_probs * torch.log_softmax(critic_log, dim=-1), dim=-1).mean()
-
-    return loss
 
