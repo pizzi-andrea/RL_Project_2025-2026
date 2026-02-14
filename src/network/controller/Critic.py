@@ -20,11 +20,7 @@ class Critic(nn.Module):
             nn.SiLU(),
         )
         
-        self.buckets_proj = nn.Sequential(
-            nn.Linear(in_features=hidden_dim, out_features=num_buckets),
-            
-        )
-
+        self.buckets_proj = nn.Linear(in_features=hidden_dim, out_features=num_buckets)
         self.softmax = nn.Softmax()
 
     
@@ -36,7 +32,10 @@ class Critic(nn.Module):
 
         pred_values_log =  self.buckets_proj(x)
         pred_values_prob = self.softmax(pred_values_log)
+
+        # -- weighted mean
         pred_values = (pred_values_prob * self.buckets).sum(dim=-1)
+
         return pred_values_log, pred_values
         
 

@@ -20,12 +20,9 @@ class EnviromentAdapter:
         #self.gamepad = GamePad()
 
     def reset_memory_agent(self):
-        # Inizializza lo stato e assicurati che sia staccato dal grafo precedente
         self.memory = self.agent.dreamer_model.rssm.init_state(1, self.device)
-        # Suggerimento: svuota la cache CUDA se necessario
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    @no_grad
+        
+    @no_grad()
     def act(self, obs:np.ndarray, user_att:list[float], action, mask_actions=None, local_act_order:list[str]=[]):
         #self.gamepad.reset()
         
@@ -37,6 +34,9 @@ class EnviromentAdapter:
         obs_encode = self.agent.dreamer_model.encode(frame, user_att_t)
         
         self.memory, _ = self.agent.dreamer_model.rssm.observe_step(self.memory, action_t, obs_encode)
+
+        self.memory.h = self.memory.h.detach()
+        self.memory.z = self.memory.z.detach()
         
         latent = torch.cat([self.memory.h, self.memory.z], dim=-1)
         latent = self.agent.dreamer_model.feat_proj(latent)
@@ -122,10 +122,7 @@ class EnviromentAdapter:
                 att = OrderedDict.fromkeys(DoomNames.att_player_names, 0)
                 for a, n in zip(game_info, local_stat_name):
                     att[n] = a
-
-                
-                
-                
+ 
                 # Agisci
                 local_action, _ = self.act(s, list(att.values()), action=list(act.values()), mask_actions=act_mask, local_act_order=local_buttons_name)
                 
@@ -147,8 +144,6 @@ class EnviromentAdapter:
                     "done": bool(done),
                     
                 }
-
-                
 
                 current_episode_buffer.append(transition | act | att)
                 s = s_next

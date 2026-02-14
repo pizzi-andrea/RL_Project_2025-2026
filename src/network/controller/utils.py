@@ -42,20 +42,16 @@ def twohot(x, B):
     B: Centri dei bin (già in scala symexp), shape [N]
     returns: Vettore two-hot, shape [..., N]
     """
-    # 1. Trova l'indice k: numero di bin b_j < x (Formula 12)
-    # x.unsqueeze(-1) permette il confronto broadcast tra [..., 1] e [N]
+   
     k = torch.sum(B < x.unsqueeze(-1), dim=-1) # Shape [...]
     
-    # 2. Clipping degli indici per evitare Out-of-Bounds
-    # k deve essere compreso tra 1 e N-1 per poter accedere a b_k e b_{k+1}
-    # (Nota: nella formula k e k+1 sono indici 1-based, qui usiamo 0-based)
     k = torch.clamp(k, 1, B.size(0) - 1)
     
     # 3. Recupera i valori dei bin b_k e b_{k+1}
     b_k = B[k - 1]
     b_k1 = B[k]
     
-    # 4. Calcola i pesi (Formula 12)
+    # 
     # w_k = |b_{k+1} - x| / |b_{k+1} - b_k|
     # w_k1 = |b_k - x| / |b_{k+1} - b_k|
     denom = b_k1 - b_k
@@ -76,27 +72,20 @@ def twohot(x, B):
 @torch.no_grad() 
 def lambda_returns(rewards, values, continues, gamma=0.997, lam=0.95):
     """
-    Calcola i Lambda-returns. Gestisce input di lunghezza uguale [B, T].
-    Se len(values) == len(rewards), calcola T-1 ritorni (perde l'ultimo step).
-    """
-    # rewards:   [B, T]
-    # values:    [B, T] oppure [B, T+1]
     
-    # 1. Gestione del disallineamento T vs T+1
+    """
+
+    #
     if values.shape[1] == rewards.shape[1]:
-        # Se abbiamo tanti valori quanti reward, non possiamo calcolare
-        # il ritorno per l'ultimo reward perché manca il valore futuro (bootstrap).
-        # Quindi ignoriamo l'ultimo reward e calcoliamo returns per 0..T-2.
+        
+        
         rewards = rewards[:, :-1]
         continues = continues[:, :-1]
         
-        # values[:, :-1] sono i V(s_t) per t=0..T-2
-        # values[:, 1:]  sono i V(s_{t+1}) per t=0..T-2 (che funge da bootstrap)
         v_pred = values[:, :-1]
         next_val = values[:, 1:]
     else:
-        # Caso standard: values ha un elemento in più (bootstrap esplicito)
-        # rewards: [B, T], values: [B, T+1]
+        
         v_pred = values[:, :-1]
         next_val = values[:, 1:]
 
@@ -126,9 +115,6 @@ def lambda_returns(rewards, values, continues, gamma=0.997, lam=0.95):
         
     targets = torch.stack(returns_list, dim=1)
     return targets
-
-
-
 
 
 def make_video(frames, output_path, fps=30):
@@ -177,10 +163,6 @@ def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, c
     ema_scale = s.detach().cpu().numpy().mean()
     
     return final_loss, ema_scale
-
-def symlog_loss(pred_symlog, real_symlog):
-    """Evaluate the network capacity to predict target value directly in symlog scale"""
-    return 0.5*torch.pow((pred_symlog - real_symlog), 2)
 
 def critic_loss(v_hat, target, continues):
 

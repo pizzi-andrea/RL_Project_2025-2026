@@ -61,7 +61,7 @@ class DreamerAgent(L.LightningModule):
         # def parameters
         #   lr: 0.00003
         #   eps: 1e-20
-        return LaProp(self.parameters(), lr=self.hparams.lr, eps=1e-20)
+        return LaProp(self.parameters(), lr=self.hparams.lr, eps=1e-10)
 
     def training_step(self, batch, batch_idx):
         """Dreamer traning procedure (burn in + dreamer)"""
@@ -140,6 +140,9 @@ class DreamerAgent(L.LightningModule):
         return loss
         
     def act(self, obs, att_user, old_act, rssm_state):
+        """Single step agent action"""
+
+        # -- define virtual batch
         obs_t = obs.unsqueeze(0).unsqueeze(0)
         att_t = att_user.unsqueeze(0).unsqueeze(0)
 
@@ -164,7 +167,18 @@ class DreamerAgent(L.LightningModule):
         pass
 
     def on_train_epoch_end(self):
-        pass
+        varam_alloc = torch.cuda.memory_allocated() / 1024**3
+        vram_peak = torch.cuda.max_memory_allocated() / 1024**3
+        self.log("VRAM_peak", vram_peak, on_epoch=True)
+        self.log("VRAM", varam_alloc, on_epoch=True)
+        return 
+    
+    
+    def on_train_epoch_start(self):
+        varam_alloc = torch.cuda.memory_allocated() / 1024**3
+        vram_peak = torch.cuda.max_memory_allocated() / 1024**3
+        self.log("VRAM_peak", vram_peak, on_epoch=True)
+        self.log("VRAM", varam_alloc, on_epoch=True)
         # --
         #with torch.no_grad():
             
@@ -200,23 +214,33 @@ class DreamerAgent(L.LightningModule):
                 action_t = action[:, t]
                 m = mask[:, t]
                 rssm_state, _ = self.rssm.observe_step(rssm_state, action_t, enc_t, m)
+        
+        # -- for security detach gradients
         z = rssm_state.z.detach()
         h = rssm_state.h.detach()
         z_log = rssm_state.z_logits.detach()
-
+        
+        # -- re-assemble states
         rssm_state.z = z
         rssm_state.h = h 
         rssm_state.z_logits = z_log
+        
         # -- immagination using rssm
         for t in range(self.horizont):
+            
+            # define embedding from rssm state (detterministic + probab)
             embed = torch.cat([rssm_state.h, rssm_state.z], dim=-1)
             embed = self.dreamer_model.feat_proj(embed)
-            latent_states[:,t] =embed
+            
+            latent_states[:,t] = embed
 
-            reward[:, t] = self.dreamer_model.predict_reward(embed).squeeze(-1)
-            cont = (self.dreamer_model.predict_continue(embed)).squeeze(-1)
-            continues[:,t] = nn.functional.sigmoid(cont)
-
+            # get reward from dreamer model
+            _, reward[:, t] = self.dreamer_model.predict_reward(embed)
+            
+            # get continue flag from model
+            continues[:,t] = self.dreamer_model.predict_continue(embed)
+            
+            # use actor to predict next action
             action, dist_a = self.actor(embed, mask_actions)
 
             entropys[:, t] = dist_a.entropy()

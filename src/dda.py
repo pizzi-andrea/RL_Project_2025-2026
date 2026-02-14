@@ -4,7 +4,7 @@ import numpy as np
 from pathlib import Path
 from collections import deque
 from shutil import rmtree
-
+from tofolder import dict2folder
 
 class DynamicDataAllocator:
     """
@@ -49,12 +49,12 @@ class DynamicDataAllocator:
         
         save_path = base_path.joinpath(f"{episode_subdir_idx}")
 
-        # Serializza e salva su disco usando la logica di doomData
+        
         dict2folder(episode, save_path)
         if exstras:
             np.savez_compressed(save_path.joinpath("mask_actions.npz"), **exstras)
 
-        # Memorizza il path nel buffer PER
+        
         self.buffer.store(save_path, True)
 
         episode.clear()
