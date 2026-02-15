@@ -32,19 +32,19 @@ class VAE(L.LightningModule):
             # Layer 1: 3 -> d1
             nn.Conv2d(3, d1, 4, 2, 1),
             nn.BatchNorm2d(d1),
-            nn.SiLU(),
+             nn.ReLU(),
             # Layer 2: d1 -> d2
             nn.Conv2d(d1, d2, 4, 2, 1),
             nn.BatchNorm2d(d2),
-            nn.SiLU(),
+            nn.ReLU(),
             # Layer 3: d2 -> d3
             nn.Conv2d(d2, d3, 4, 2, 1),
             nn.BatchNorm2d(d3),
-            nn.SiLU(),
+             nn.ReLU(),
             # Layer 4: d3 -> d4
             nn.Conv2d(d3, d4, 4, 2, 1),
             nn.BatchNorm2d(d4),
-            nn.SiLU()
+             nn.ReLU(),
         )
 
         # --- DECODER ---
@@ -52,22 +52,20 @@ class VAE(L.LightningModule):
             # Layer 1: d4 -> d3
             nn.ConvTranspose2d(d4, d3, 4, 2, 1, output_padding=(1, 0)), # Note: output_padding tuning might be needed based on exact resolution
             nn.BatchNorm2d(d3),
-            nn.SiLU(),
+            nn.ReLU(),
             # Layer 2: d3 -> d2
             nn.ConvTranspose2d(d3, d2, 4, 2, 1),
             nn.BatchNorm2d(d2),
-            nn.SiLU(),
+            nn.ReLU(),
             # Layer 3: d2 -> d1
             nn.ConvTranspose2d(d2, d1, 4, 2, 1),
             nn.BatchNorm2d(d1),
-            nn.SiLU(),
+            nn.ReLU(),
             # Layer 4: d1 -> 3
             nn.ConvTranspose2d(d1, 3, 4, 2, 1)
         )
         
-        # Assuming input is 120x160 based on your previous code:
-        # 160 / 2^4 = 10
-        # 120 / 2^4 = 7.5 -> 7 (via floor in Conv2d)
+
         self.last_conv_height = 7
         self.last_conv_width = 10
         self.num_filters = d4 # This is now dynamic: 8 * (model_dim // 16)
@@ -91,9 +89,9 @@ class VAE(L.LightningModule):
         self.fc_decoder = nn.Sequential(
             nn.Linear(latent_dim, mlp_hidden),
             nn.RMSNorm(mlp_hidden),
-            nn.SiLU(),
+            nn.ReLU(),
             nn.Linear(mlp_hidden, flatten_dim),
-            nn.SiLU()
+            nn.ReLU()
         )
 
         # Initialization

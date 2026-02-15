@@ -30,51 +30,43 @@ class Actor(nn.Module):
         torch.nn.init.orthogonal_(self.dist_pred.weight, gain=0.01) 
         self.dist_pred.bias.data.fill_(0.0)
 
-    def reparameterize_categorical(self, logits):
-        return F.gumbel_softmax(logits, tau=1.0, hard=True)
+    #def reparameterize_categorical(self, logits):
+    #    return F.gumbel_softmax(logits, tau=1.0, hard=True)
     
-    def reparameterize_bernoulli(self, probs):
-        sample = torch.bernoulli(probs)
-        return probs + (sample - probs).detach()
+    #def reparameterize_bernoulli(self, probs):
+    #    sample = torch.bernoulli(probs)
+    #    return probs + (sample - probs).detach()
+    
+    # In Actor.py
     
     def forward(self, x, valid_actions_mask=None):
         x = self.l1(x)
         x = self.l2(x)
 
         logits = self.dist_pred(x)
-        # -- masking invalid action
+        
+        # --- Masking delle azioni (Mantiene la tua logica corretta) ---
         if valid_actions_mask is not None:
             mask = valid_actions_mask.bool()
-
-            # Hard masking
             logits = logits.masked_fill(~mask, float('-inf'))
-
-            # compute probs
             probs = F.softmax(logits, dim=-1)
-
-            # applay unimix on only valid actions, keep zeros prob invalid actions
+            # Unimix (Paper Eq. 10: mix con uniforme per esplorazione)
             num_valid = mask.sum(dim=-1, keepdim=True)
             uniform = mask.float() / num_valid
-
         else:
             probs = F.softmax(logits, dim=-1)
             uniform = torch.full_like(probs, 1.0 / self.num_dist)
 
-        # unimix
+        # Applicazione Unimix (Eq. 10)
         probs = (1.0 - self.unimix) * probs + self.unimix * uniform
-
-        logits = torch.log(probs + 1e-8)
-        action = self.reparameterize_categorical(logits)
+        
+       
         dist = OneHotCategorical(probs=probs)
-    
-        """
-            probs = torch.sigmoid(logits)
-            probs = (1.0 - self.unimix) * probs + (self.unimix * 0.5)
-            if valid_actions_mask is not None:
-                probs = probs * valid_actions_mask
-            action = self.reparameterize_bernoulli(probs)
-            dist = Independent(Bernoulli(probs=probs), reinterpreted_batch_ndims=1)
-        """
+        
+        # Campionamento STOCASTICO (Senza gradienti sull'azione!)
+        # Questo è fondamentale per REINFORCE. L'azione è un "numero", non un tensore differenziabile.
+        action = dist.sample() 
+        
         return action, dist
 
     

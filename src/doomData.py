@@ -146,7 +146,7 @@ def collate_fn(batch):
     obs = pad_sequence(batch_obs, batch_first=True)
     action = pad_sequence(batch_action, batch_first=True).float()
     reward = pad_sequence(batch_reward, batch_first=True).float()
-    done = pad_sequence(batch_done, batch_first=True).float()
+    done = pad_sequence(batch_done, batch_first=True, padding_value=1).float()
     user_att = pad_sequence(batch_user_att, batch_first=True).float()
 
     mask = pad_sequence([torch.ones(len(b), dtype=torch.float32) for b in batch_obs], batch_first=True)
@@ -159,6 +159,7 @@ def collate_fn(batch):
         "action": action,
         "reward": reward,
         "done": done,
+        "continue": 1.0 - done,
         "mask": mask,
         "user_att": user_att,
         "priority_idx": batch_idx,

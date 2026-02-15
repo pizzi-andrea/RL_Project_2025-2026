@@ -32,89 +32,63 @@ def symlog(x):
     return torch.sign(x) * torch.log(torch.abs(x) + 1.0)
 
 
-def symexp(x):
+def symexp(x, mm=-20.0, mx=20.0):
+    #x = x.clamp(mm, mx)
     return torch.sign(x)*(torch.exp(torch.abs(x)) - 1)
 
-@torch.no_grad()
-def twohot(x, B):
-    """
-    x: Target scalari (es. lambda-returns), shape [...]
-    B: Centri dei bin (già in scala symexp), shape [N]
-    returns: Vettore two-hot, shape [..., N]
-    """
-   
-    k = torch.sum(B < x.unsqueeze(-1), dim=-1) # Shape [...]
-    
-    k = torch.clamp(k, 1, B.size(0) - 1)
-    
-    # 3. Recupera i valori dei bin b_k e b_{k+1}
-    b_k = B[k - 1]
-    b_k1 = B[k]
-    
-    # 
-    # w_k = |b_{k+1} - x| / |b_{k+1} - b_k|
-    # w_k1 = |b_k - x| / |b_{k+1} - b_k|
-    denom = b_k1 - b_k
-    w_k = (b_k1 - x) / denom
-    w_k1 = (x - b_k) / denom
-    
-    # 5. Costruzione del vettore di output
-    out = torch.zeros(*x.shape, B.size(0), device=x.device)
-    
-    # Usiamo scatter per posizionare i pesi negli indici corretti
-    # out.scatter_(dim, index, value)
-    out.scatter_(-1, (k - 1).unsqueeze(-1), w_k.unsqueeze(-1))
-    out.scatter_(-1, k.unsqueeze(-1), w_k1.unsqueeze(-1))
-    
-    # 6. Clipping finale dei pesi tra 0 e 1 (per valori di x fuori dal range dei bin)
-    return torch.clamp(out, 0, 1)
 
-@torch.no_grad() 
+@torch.no_grad()
 def lambda_returns(rewards, values, continues, gamma=0.997, lam=0.95):
     """
+    Calcola i Lambda-targets per DreamerV3.
     
+    Args:
+        rewards:   [B, T]
+        values:    [B, T+1] (Include il valore di bootstrap allo step T+1)
+        continues: [B, T]
+        gamma:     fattore di sconto
+        lam:       parametro lambda per il bilanciamento bias-variance
+    
+    Returns:
+        lambda_returns: [B, T]
     """
-
-    #
-    if values.shape[1] == rewards.shape[1]:
-        
-        
-        rewards = rewards[:, :-1]
-        continues = continues[:, :-1]
-        
-        v_pred = values[:, :-1]
-        next_val = values[:, 1:]
-    else:
-        
-        v_pred = values[:, :-1]
-        next_val = values[:, 1:]
-
-    batch_size, horizon = rewards.shape
+    # 1. Verifica dimensionale critica (Bottleneck frequente in debug)
+    assert values.shape[1] == rewards.shape[1] + 1, \
+        f"Mismatch dimensionale: values {values.shape} deve essere T+1 rispetto a rewards {rewards.shape}"
     
-    # Inizializza buffer
-    last_gae = torch.zeros(batch_size, device=rewards.device)
-    returns_list = []
+    # 2. Preparazione dei tensori
+    # Usiamo i valori futuri V(s_{t+1}) per il calcolo
+    next_values = values[:, 1:] 
     
-    # Backward Pass
-    for t in reversed(range(horizon)):
+    # Il bootstrap è l'ultimo valore disponibile in values (V_T)
+    # Inizializziamo l'accumulatore 'last_lambda_return' con questo bootstrap.
+    # Nota: Se l'episodio finisce, 'continues' sarà 0 e questo valore verrà annullato correttamente.
+    last_lambda_return = values[:, -1]
+    
+    # Raccogliamo i returns in una lista (più efficiente di pre-allocare e assegnare in-place su GPU)
+    returns = []
+    
+    # 3. Backward Pass (Calcolo ricorsivo)
+    # Formula: R_t = r_t + gamma * c_t * ( (1-lambda)*V_{t+1} + lambda*R_{t+1} )
+    # Iteriamo da T-1 a 0
+    num_steps = rewards.shape[1]
+    
+    for t in reversed(range(num_steps)):
         r_t = rewards[:, t]
         c_t = continues[:, t]
-        v_next = next_val[:, t]   # V(s_{t+1})
-        v_curr = v_pred[:, t]     # V(s_t)
+        v_next_t = next_values[:, t] # V(s_{t+1})
         
-        # Delta TD
-        delta = r_t + gamma * c_t * v_next - v_curr
+        # Calcolo del target per lo step t
+        # (1 - lam) * v_next_t: Componente Value Function (Bias)
+        # lam * last_lambda_return: Componente Monte Carlo / Bootstrap (Variance)
+        target = r_t + c_t * gamma * ((1.0 - lam) * v_next_t + lam * last_lambda_return)
         
-        # GAE
-        last_gae = delta + gamma * lam * c_t * last_gae
-        
-        # Lambda Return = Advantage + Value
-        result_t = last_gae + v_curr
-        
-        returns_list.insert(0, result_t)
-        
-    targets = torch.stack(returns_list, dim=1)
-    return targets
+        last_lambda_return = target
+        returns.append(target)
+    
+    # 4. Ricostruzione del tensore (inversione della lista temporale)
+    returns.reverse()
+    return torch.stack(returns, dim=1)
 
 
 def make_video(frames, output_path, fps=30):
@@ -137,41 +111,78 @@ def make_video(frames, output_path, fps=30):
 
 
 
-def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, continues, entropy_scale=3e-4, debug=False):
-    advantages = td_return - critic_values
+def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, continues, entropy_scale=3e-4):
+    # 1. Calcola la scala (Media Mobile)
     s = ema_scaler(td_return)
-    scaled_advantages = (advantages / torch.clamp(s, min=1.0)).detach()
-
-    loss = -(scaled_advantages*action_log_prob + entropy_scale*entropy) * continues
-
-    # scale loss respect only valid steps
-    total_valid_steps = continues.sum()
-    final_loss = loss.sum() / torch.clamp(total_valid_steps, min=1.0)
-
-    # --- DEBUG BLOCK START ---
-    if debug:
-        with torch.no_grad():
-        
-                print(f"\n--- DEBUG ACTOR LOSS ---")
-                print(f"Returns (Target): Mean={td_return.mean().item():.4f}, Max={td_return.max().item():.4f}")
-                print(f"Critic Values:    Mean={critic_values.mean().item():.4f}")
-                print(f"Advantage Raw:    Mean={advantages.mean().item():.4f}")
-                print(f"EMA Scaler (s):   Value={s.mean().item():.4f}")
-                print(f"Log Probs:        Mean={action_log_prob.mean().item():.4f}")
-                print(f"Entropy:          Mean={entropy.mean().item():.4f}")
-        # --- DEBUG BLOCK END ---
+    
+    normalized_advantage = ((td_return - critic_values) / torch.clamp(s, min=1.0)).detach()
+    per_step_objective = (normalized_advantage * action_log_prob) + (entropy_scale * entropy)
+    masked_objective = per_step_objective * continues
+    lengths = continues.sum(dim=1).clamp(min=1.0)
+    final_loss = -(masked_objective.sum(dim=1) / lengths).mean()
+    
     ema_scale = s.detach().cpu().numpy().mean()
     
     return final_loss, ema_scale
 
 def critic_loss(v_hat, target, continues):
-
+    # v_hat: [B, T, Buckets], target: [B, T, Buckets], continues: [B, T]
     log_probs = torch.nn.functional.log_softmax(v_hat, dim=-1)   
-    per_step_loss = -(target * log_probs).sum(dim=-1)    
-    masked_loss = per_step_loss * continues
-    total_valid_steps = continues.sum()
-    final_loss = masked_loss.sum() / torch.clamp(total_valid_steps, min=1.0)
+    per_step_loss = -(target * log_probs).sum(dim=-1) # Shape: [B, T]
+    
+  
+    #loss_sum_T = (per_step_loss * continues).sum(dim=1) # Shape: [B]
+    lengths = continues.sum().clamp(min=1.0) # Shape: [B]
+    
+    final_loss = (per_step_loss * continues).sum() / lengths
 
     return final_loss
 
 
+@torch.no_grad()
+def twohot(x, B):
+    """
+    Codifica Two-Hot robusta per bucket equidistanti.
+    
+    Args:
+        x: Target scalari (symlog), shape [Batch, T]
+        B: Centri dei bucket, shape [Num_Buckets] (assunto linspace ordinato)
+    Returns:
+        out: Distribuzione Two-Hot, shape [Batch, T, Num_Buckets]
+    """
+    # 1. Calcoliamo lo step dei bucket (assumendo linspace)
+    min_b = B[0]
+    max_b = B[-1]
+    num_buckets = B.shape[0]
+    step = (max_b - min_b) / (num_buckets - 1)
+
+    # 2. Normalizziamo x nello spazio degli indici [0, Num_Buckets-1]
+    # Formula inversa di linspace: index = (value - min) / step
+    idx = (x - min_b) / step
+    
+    # 3. Clampiamo gli indici per evitare errori fuori range
+    # Togliamo un epsilon (1e-5) per essere sicuri che l'indice massimo non sfori
+    idx = idx.clamp(0, num_buckets - 1 - 1e-5)
+    
+    # 4. Troviamo gli indici interi adiacenti (Lower e Upper)
+    lower = idx.floor().long()
+    upper = lower + 1
+    
+    # 5. Calcoliamo i pesi (interpolazione lineare)
+    # Se idx è 5.7 -> lower=5, upper=6.
+    # Peso su upper (6) = 0.7
+    # Peso su lower (5) = 1.0 - 0.7 = 0.3
+    upper_weight = idx - lower.float()
+    lower_weight = 1.0 - upper_weight
+    
+    # 6. Creiamo il tensore di output vuoto
+    # Shape: [Batch, T, Num_Buckets]
+    out = torch.zeros(*x.shape, num_buckets, device=x.device)
+    
+    # 7. Distribuiamo i pesi (Scatter)
+    # Dobbiamo espandere l'ultima dimensione per fare matching con 'out' durante lo scatter
+    # lower.unsqueeze(-1) trasforma [B, T] in [B, T, 1]
+    out.scatter_add_(-1, lower.unsqueeze(-1), lower_weight.unsqueeze(-1))
+    out.scatter_add_(-1, upper.unsqueeze(-1), upper_weight.unsqueeze(-1))
+    
+    return out

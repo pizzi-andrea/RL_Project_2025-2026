@@ -8,6 +8,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 from yaml import safe_load
 from doomData import *
+from utils import *
 from dda import DynamicDataAllocator
 from env_adapter import EnviromentAdapter
 from network.controller.Policy import DreamerAgent
@@ -42,9 +43,12 @@ def main():
     cmd = argparse.ArgumentParser()
     cmd.add_argument("--load_weights", action="store_true", required=False, help="load weights from src/weights directory")
     args = cmd.parse_args()
-    
     with open("config.yaml", "r") as file:
         config = safe_load(file)
+    validation_log = Path(config["global_config"]["Project_logs"]).joinpath("best_epochs")
+    validation_log.mkdir(parents=True, exist_ok=True)
+
+    
     
     image_processor = lambda x: torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
     log_experiment = Path(config["global_config"]["Project_logs"])
@@ -106,7 +110,10 @@ def main():
                 stoch_classes       =   config["rssm_config"]["stochastic_classes"],
                 stoch_latents       =   config["rssm_config"]["stochastic_latent"],
                 rssm_hidden_dim     =   config["rssm_config"]["rssm_latent_dim"],
-                h_dim               =   config["rssm_config"]["detterministic_latent_dim"]                  
+                h_dim               =   config["rssm_config"]["detterministic_latent_dim"],
+                buckets             =   config["rssm_config"]["buckets"],
+                min_buckets         =   config["rssm_config"]["min_buckets"],
+                max_buckets         =   config["rssm_config"]["max_buckets"]                
         )
     else:
         rssm_model = Dreamer(
@@ -126,7 +133,9 @@ def main():
                 stoch_latents       =   config["rssm_config"]["stochastic_latent"],
                 rssm_hidden_dim     =   config["rssm_config"]["rssm_latent_dim"],
                 h_dim               =   config["rssm_config"]["detterministic_latent_dim"],
-                buckets             =   config["rssm_config"]["buckets"]            
+                buckets             =   config["rssm_config"]["buckets"],
+                min_buckets         =   config["rssm_config"]["min_buckets"],
+                max_buckets         =   config["rssm_config"]["max_buckets"]
         ) 
     
     if args.load_weights and Path(config["global_config"]["policy_w"]).exists():
@@ -144,12 +153,16 @@ def main():
                     unimix=config["policy_config"]["unimix"],
                     ema_decay=config["policy_config"]["ema_decay"],
                     ema_epsilon=config["policy_config"]["ema_epsilon"],
+                    min_buckets         =   config["policy_config"]["min_buckets"],
+                    max_buckets         =   config["policy_config"]["max_buckets"]
+                    
         )
     
     envs = EnviromentAdapter(agent_model, DynamicDataAllocator(config["PER_config"]["cache"], PER4train))
-
+    print(f"Total steps for DREAMER: {config["global_config"]["sample_episods"]/config["rssm_config"]["train_batch"]}")
+    print(f"Total steps for Policy: {config["global_config"]["sample_episods"]/config["policy_config"]["train_batch"]}")
     for epoch in range(1, config["global_config"]["dreamer_iterations"] + 1):
-        sampled_episods, priority_idxs, buffer_idxs, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), 300))
+        sampled_episods, priority_idxs, _, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), config["global_config"]["sample_episods"]))
         
         rssm_train_loader = DataLoader(EpisodicDoomDataset(
                 episods=sampled_episods,
@@ -170,7 +183,7 @@ def main():
 
         rssm_trainer.fit(rssm_model, train_dataloaders=rssm_train_loader)
         
-        sampled_episods, priority_idxs, buffer_idxs, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), 300))
+        sampled_episods, priority_idxs, _, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), config["global_config"]["sample_episods"]))
         
         policy_train_loader = DataLoader(EpisodicDoomDataset(
                 episods=sampled_episods,
@@ -195,6 +208,8 @@ def main():
             for env, n in zip(config["global_config"]["envs"], config["global_config"]["envs_episods"]):
                 reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=1, max_length=config["global_config"]["max_episode_length"])
                 print(f"mean reword collected by policy {reword} in env {env}")
+                create_video_from_frames(best_path.joinpath("obs"), validation_log.joinpath(f"{env}_{epoch}.mp4"), 30)
+                
         
         torch.cuda.empty_cache()
 

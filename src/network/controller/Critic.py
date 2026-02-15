@@ -4,10 +4,12 @@ import torch
 
 class Critic(nn.Module):
     """Network for Critic rule implemented with support at Robust predictor method"""
-    def __init__(self, dim_state, num_buckets, hidden_dim=1024):
+    def __init__(self, dim_state, num_buckets, min_buckets=-10, max_buckets=10, hidden_dim=1024):
         super().__init__()
         self.num_buckets = num_buckets
-        self.register_buffer("buckets", symexp( torch.linspace(-20, 20, num_buckets) ) )
+        self.register_buffer("buckets", torch.linspace(min_buckets, max_buckets, num_buckets) )
+        self.min_buckets = min_buckets
+        self.max_buckets = max_buckets
         self.l1 = nn.Sequential(
             nn.Linear(in_features=dim_state, out_features=hidden_dim),
             nn.RMSNorm(hidden_dim),
@@ -21,9 +23,10 @@ class Critic(nn.Module):
         )
         
         self.buckets_proj = nn.Linear(in_features=hidden_dim, out_features=num_buckets)
-        self.softmax = nn.Softmax()
+        self.softmax = nn.Softmax(-1)
 
-    
+        self.buckets_proj.weight.data.fill_(0.0)
+        self.buckets_proj.bias.data.fill_(0.0)
   
 
     def forward(self, x):
@@ -34,7 +37,8 @@ class Critic(nn.Module):
         pred_values_prob = self.softmax(pred_values_log)
 
         # -- weighted mean
-        pred_values = (pred_values_prob * self.buckets).sum(dim=-1)
+        pred_symlog = (pred_values_prob * self.buckets).sum(dim=-1)
+        pred_values = symexp(pred_symlog, self.min_buckets, self.max_buckets)
 
         return pred_values_log, pred_values
         

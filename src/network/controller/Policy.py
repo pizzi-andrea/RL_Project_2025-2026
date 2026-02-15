@@ -6,6 +6,7 @@ import torch
 
 from torch import nn
 from timm.optim.laprop import LaProp
+from torch.optim import Adam
 from ..worldModel.dreamer import Dreamer
 from .utils import *
 from .Actor import Actor
@@ -13,7 +14,18 @@ from .Critic import Critic
 
 class DreamerAgent(L.LightningModule):
     """Agent based on Dreamer model"""
-    def __init__(self, dreamer_model:Dreamer|str, bukets=255, action_space_dim:int=16, entropy_coef:int=0.0003,horizont:int=15, burn_in:int=3, unimix:float= 0.01, ema_decay:float= 0.98, ema_epsilon:float= 1e-6, lr=0.001, hidden_dim:int=1024, one_hot:bool=True):
+    def __init__(self, dreamer_model:Dreamer|str, 
+                 bukets:int=255,
+                 min_buckets:int=-10,
+                 max_buckets:int=10, 
+                 action_space_dim:int=16, 
+                 entropy_coef:int=0.0003,
+                 horizont:int=15, 
+                 burn_in:int=3, 
+                 unimix:float= 0.01, 
+                 ema_decay:float= 0.98, 
+                 ema_epsilon:float= 1e-6, 
+                 lr=0.001, hidden_dim:int=1024, one_hot:bool=True):
         super().__init__()
         self.save_hyperparameters(ignore=["dreamer_model"])
         # import dreamer model or weigths
@@ -40,28 +52,28 @@ class DreamerAgent(L.LightningModule):
         
         # -- Define Actor-critic Structure
         self.actor = Actor(dim_state=self.emb_dim, num_dist=action_space_dim, unimix=unimix, hidden_dim=1024)
-        self.critic = Critic(dim_state=self.emb_dim, num_buckets=bukets, hidden_dim=hidden_dim)
+        self.critic = Critic(dim_state=self.emb_dim, num_buckets=bukets, min_buckets=min_buckets, max_buckets=max_buckets, hidden_dim=hidden_dim)
 
     def setup(self, stage):
         """Disable network gradients (different by evaluation mode!)"""
         self.dreamer_model.freeze_model()
     
-    def reparameterize_categorical(logits, tau=1.0):
-        """Reparametrization trick for OneHot categorical sampling"""
-        return F.gumbel_softmax(logits, tau=tau, hard=True)
+   # def reparameterize_categorical(logits, tau=1.0):
+   #     """Reparametrization trick for OneHot categorical sampling"""
+   #     return F.gumbel_softmax(logits, tau=tau, hard=True)
     
-    def reparameterize_bernoulli(logits):
+    #def reparameterize_bernoulli(logits):
         """Reparametrization trick for Bernoullie sampling"""
-        probs = torch.sigmoid(logits)
-        sample = torch.bernoulli(probs)
-        return probs + (sample - probs).detach()
+    #    probs = torch.sigmoid(logits)
+    #    sample = torch.bernoulli(probs)
+    #    return probs + (sample - probs).detach()
     
 
     def configure_optimizers(self):
         # def parameters
         #   lr: 0.00003
         #   eps: 1e-20
-        return LaProp(self.parameters(), lr=self.hparams.lr, eps=1e-10)
+        return LaProp(self.parameters(), self.hparams.lr, eps=1e-20)
 
     def training_step(self, batch, batch_idx):
         """Dreamer traning procedure (burn in + dreamer)"""
@@ -91,25 +103,31 @@ class DreamerAgent(L.LightningModule):
 
         # -- critic: estimate expected values and lambda-return
         v_hat_log, v_hat = self.critic(states_hat)
+        discount = torch.cumprod(torch.cat([torch.ones_like(c_hat[:, :1]), 0.997 * c_hat[:, :-1]],dim=1),dim=1)
 
         # r_hat and v_hat are just in same scales and encoding with twohot method
         
-        lambda_return = lambda_returns(
-            rewards=r_hat,
+        
+        
+
+        
+  
+        with torch.no_grad():
+            lambda_return = lambda_returns(
+            rewards=r_hat[:, :-1],
             values=v_hat,
             continues=c_hat
-        )
-        
-        # encode target using twohot function for loss
-        with torch.no_grad():
-            two_hot_lambda_return = twohot(lambda_return, self.critic.buckets)
+            )
+
+            sym_lambda_return  = symlog(lambda_return)
+            two_hot_lambda_return = twohot(sym_lambda_return, self.critic.buckets)
         
         
         # -- evaluate critic respect lambda return in twohot encoding
         critic_l = critic_loss(
             v_hat_log[:, :-1], 
             two_hot_lambda_return, 
-            continues=c_hat[:, :-1]
+            continues=discount[:, :-1]
         )
         
         # -- compute actor loss respect lambda_return and v_hat not in twohot encoding
@@ -120,22 +138,35 @@ class DreamerAgent(L.LightningModule):
             entropy[:, :-1], 
             self.ema, 
             entropy_scale=self.entropy_coef,
-            continues=c_hat[:, :-1]
+            continues=discount[:, :-1]
         )
         
         # -- ignore terminated steps
 
         loss = critic_l + actor_l
+
+        valid_mask = discount[:, :-1]
+        lengths = valid_mask.sum(dim=1).clamp(min=1)
+        with torch.no_grad():
+            # Lambda return medio per traiettoria, poi media del batch
+            log_lambda = (lambda_return * valid_mask).sum(dim=1) / lengths
+            
+            # Reward media (attenzione: r_hat qui deve essere il valore scalare, non two-hot)
+            # Se r_hat è scalare (es. dopo symexp o decoding):
+            log_reward = (r_hat[:, :-1] * valid_mask).sum(dim=1) / lengths
+            
+            # Entropia media
+            log_entropy = (entropy[:, :-1] * valid_mask).sum(dim=1) / lengths
         
         self.log_dict({
-            "train_loss"    : loss.detach().item(),
-            "actor_loss"    : actor_l.detach().item(),
-            "critic_loss"   : critic_l.detach().item(),
-            "lambda_return" : lambda_return.mean().item(),
-            "mean_reward"   : r_hat.detach().mean().item(),
-            "entropy"       : entropy.detach().mean().item(),
+            "train_loss"    : loss.item(),
+            "actor_loss"    : actor_l.item(),
+            "critic_loss"   : critic_l.item(),
+            "lambda_return" : log_lambda.mean().item(),
+            "mean_reward"   : log_reward.mean().item(),
+            "entropy"       : log_entropy.mean().item(),
             "ema_scale"     : ema_scale
-        }, prog_bar=True, on_step=True, on_epoch=True)
+        }, prog_bar=True, on_step=True, on_epoch=False)
 
         return loss
         
@@ -166,19 +197,7 @@ class DreamerAgent(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         pass
 
-    def on_train_epoch_end(self):
-        varam_alloc = torch.cuda.memory_allocated() / 1024**3
-        vram_peak = torch.cuda.max_memory_allocated() / 1024**3
-        self.log("VRAM_peak", vram_peak, on_epoch=True)
-        self.log("VRAM", varam_alloc, on_epoch=True)
-        return 
-    
-    
-    def on_train_epoch_start(self):
-        varam_alloc = torch.cuda.memory_allocated() / 1024**3
-        vram_peak = torch.cuda.max_memory_allocated() / 1024**3
-        self.log("VRAM_peak", vram_peak, on_epoch=True)
-        self.log("VRAM", varam_alloc, on_epoch=True)
+        
         # --
         #with torch.no_grad():
             
@@ -202,12 +221,13 @@ class DreamerAgent(L.LightningModule):
         reward        = torch.zeros(B, self.horizont, device=obs.device)
         continues     = torch.zeros(B, self.horizont, device=obs.device)
         entropys      = torch.zeros(B, self.horizont, device=obs.device)
-        actions       = torch.zeros(B, self.horizont, action.shape[-1], device=obs.device)
+        actions_out   = torch.zeros(B, self.horizont, action.shape[-1], device=obs.device)
         log_probs     = torch.zeros(B, self.horizont, device=obs.device)
         latent_states = torch.zeros(B, self.horizont, self.emb_dim, device=obs.device)
         
         # -- burn-in rssm initialization
         burn_in = self.burn_in if self.training else 0
+
         with torch.no_grad():
             for t in range(burn_in):
                 enc_t = enc[:, t]
@@ -224,7 +244,8 @@ class DreamerAgent(L.LightningModule):
         rssm_state.z = z
         rssm_state.h = h 
         rssm_state.z_logits = z_log
-        
+
+
         # -- immagination using rssm
         for t in range(self.horizont):
             
@@ -232,22 +253,27 @@ class DreamerAgent(L.LightningModule):
             embed = torch.cat([rssm_state.h, rssm_state.z], dim=-1)
             embed = self.dreamer_model.feat_proj(embed)
             
-            latent_states[:,t] = embed
+            latent_states[:, t] = embed
 
             # get reward from dreamer model
-            _, reward[:, t] = self.dreamer_model.predict_reward(embed)
+            _, r_t = self.dreamer_model.predict_reward(embed)
             
             # get continue flag from model
-            continues[:,t] = self.dreamer_model.predict_continue(embed)
+            c_t = self.dreamer_model.predict_continue(embed)
+            
+          
+           
+            continues[:, t] = c_t.detach()
+            reward[:, t] = r_t
             
             # use actor to predict next action
-            action, dist_a = self.actor(embed, mask_actions)
+            act_t, dist_a = self.actor(embed, mask_actions)
 
             entropys[:, t] = dist_a.entropy()
-            actions[:, t] = action
-            log_probs[:, t] = dist_a.log_prob(action)
+            actions_out[:, t] = act_t
+            log_probs[:, t] = dist_a.log_prob(act_t)
 
-            rssm_state, _ = self.rssm.imagine_step(rssm_state, action)
+            rssm_state, _ = self.rssm.imagine_step(rssm_state, act_t)
 
         
         # -- pack values
@@ -256,7 +282,7 @@ class DreamerAgent(L.LightningModule):
             "continues"     : continues,
             "entropy"       : entropys, 
             "imagination"   : latent_states,
-            "actions"       : actions,
+            "actions"       : actions_out,
             "log_probs"     : log_probs
         }
 

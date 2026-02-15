@@ -35,7 +35,7 @@ class RSSM(nn.Module): # need specific train loop
         stoch_latents: int = 32,   # L (number of discrete latent variables)
         stoch_classes: int = 32,   # K (number of classes per latent variable)
         embed_dim: int = 1024,
-        gru_projection_dim: int = 1024,
+       
         unimix: float = 0.01,
     ):
         """
@@ -62,41 +62,38 @@ class RSSM(nn.Module): # need specific train loop
         self.K = stoch_classes
         self.unimix = unimix
         self.output_dimension = self.L*self.K
-        self.gru_input_proj_dim = gru_projection_dim
+        #self.gru_input_proj_dim = gru_projection_dim
 
         self.action_embed = nn.Sequential(
             nn.Linear(action_dim, embed_dim),
-            nn.RMSNorm(embed_dim), # <---
             nn.SiLU()
         )
         self.z_embed = nn.Sequential(
             nn.Linear(self.output_dimension, embed_dim),
-            nn.RMSNorm(embed_dim), # 
             nn.SiLU()
         )
 
-        self.gru_input_proj = nn.Sequential(
+        """self.gru_input_proj = nn.Sequential(
             nn.Linear(2*embed_dim, gru_projection_dim),
             nn.RMSNorm(gru_projection_dim), # 
             nn.SiLU()
-        )
+        )"""
 
-        self.gru = nn.GRUCell(input_size=gru_projection_dim, hidden_size=deter_dim) #Batch, seq, feature
+        self.gru = nn.GRUCell(input_size=2*embed_dim, hidden_size=deter_dim) #Batch, seq, feature
 
         # prior logits memory 
-        self.prior_net = nn.Sequential( # self.prior_net(h) -> logits of z
-
-            nn.Linear(deter_dim, deter_dim),
-            nn.RMSNorm(deter_dim),
+        self.prior_net = nn.Sequential(
+            nn.Linear(deter_dim, embed_dim), 
+            nn.LayerNorm(embed_dim),          
             nn.SiLU(),
-            nn.Linear(deter_dim, self.L * self.K),
+            nn.Linear(embed_dim, self.output_dimension) 
         )
         # posterior logits observation + memory
         self.post_net = nn.Sequential(
-            nn.Linear(deter_dim + obs_dim, deter_dim),
-            nn.RMSNorm(deter_dim),
+            nn.Linear(deter_dim + obs_dim, embed_dim),
+            nn.LayerNorm(embed_dim),
             nn.SiLU(),
-            nn.Linear(deter_dim, self.output_dimension),
+            nn.Linear(embed_dim, self.output_dimension)
         )
 
     def init_state(self, batch_size: int, device=None) -> RSSMState:
@@ -149,7 +146,7 @@ class RSSM(nn.Module): # need specific train loop
         return state, prior_logits
 
     def compute_prior(self, hidden_state, x):
-        x = self.gru_input_proj(x)
+        #x = self.gru_input_proj(x)
         state_next = self._gru_step(hidden_state.h, x)
         prior_logits = self.prior_net(state_next).view(-1, self.L, self.K)
 
