@@ -42,32 +42,42 @@ class Actor(nn.Module):
     def forward(self, x, valid_actions_mask=None):
         x = self.l1(x)
         x = self.l2(x)
-
         logits = self.dist_pred(x)
         
-        # --- Masking delle azioni (Mantiene la tua logica corretta) ---
+        # --- Gestione Maschera e Unimix ---
         if valid_actions_mask is not None:
             mask = valid_actions_mask.bool()
-            logits = logits.masked_fill(~mask, float('-inf'))
+            # 1. Azzera logits invalidi
+            logits = logits.masked_fill(~mask, -1e9)
             probs = F.softmax(logits, dim=-1)
-            # Unimix (Paper Eq. 10: mix con uniforme per esplorazione)
-            num_valid = mask.sum(dim=-1, keepdim=True)
+            
+            # 2. Calcola Unimix
+            num_valid = mask.sum(dim=-1, keepdim=True).clamp(min=1.0) # Clamp per sicurezza div/0
             uniform = mask.float() / num_valid
         else:
             probs = F.softmax(logits, dim=-1)
             uniform = torch.full_like(probs, 1.0 / self.num_dist)
 
-        # Applicazione Unimix (Eq. 10)
+        # 3. Mix finale (probs è già valido e somma a 1)
         probs = (1.0 - self.unimix) * probs + self.unimix * uniform
         
-       
+        # 4. Crea distribuzione
         dist = OneHotCategorical(probs=probs)
+        action = dist.sample()
+
+        # --- Calcolo Entropia (Unificato) ---
+        # Nota: dist.entropy() a volte è instabile con prob=0, il calcolo manuale è più sicuro con la mask
         
-        # Campionamento STOCASTICO (Senza gradienti sull'azione!)
-        # Questo è fondamentale per REINFORCE. L'azione è un "numero", non un tensore differenziabile.
-        action = dist.sample() 
         
-        return action, dist
+        if valid_actions_mask is not None:
+            # Calcolo manuale stabile
+            p_log_p = probs * torch.log(probs + 1e-8)
+            
+            entropy = -p_log_p.sum(dim=-1)
+        else:
+            entropy = dist.entropy()
+       
+        return action, dist, entropy
 
     
 

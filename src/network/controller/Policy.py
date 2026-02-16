@@ -85,6 +85,8 @@ class DreamerAgent(L.LightningModule):
         mask     = batch["mask"][:, 0:self.burn_in]
         mask_a   = batch["mask_action"]
 
+        self.ema = self.ema.train()
+
         # normalize and convert standard image in float32 tensor
         if obs.dtype == torch.uint8:
             obs = obs.float().div_(255.0).detach()
@@ -100,18 +102,14 @@ class DreamerAgent(L.LightningModule):
         entropy = output["entropy"]
         a_hat_log_probs = output["log_probs"]
         
+        
 
         # -- critic: estimate expected values and lambda-return
         v_hat_log, v_hat = self.critic(states_hat)
         discount = torch.cumprod(torch.cat([torch.ones_like(c_hat[:, :1]), 0.997 * c_hat[:, :-1]],dim=1),dim=1)
 
-        # r_hat and v_hat are just in same scales and encoding with twohot method
         
-        
-        
-
-        
-  
+          
         with torch.no_grad():
             lambda_return = lambda_returns(
             rewards=r_hat[:, :-1],
@@ -121,6 +119,14 @@ class DreamerAgent(L.LightningModule):
 
             sym_lambda_return  = symlog(lambda_return)
             two_hot_lambda_return = twohot(sym_lambda_return, self.critic.buckets)
+
+            #print("r_hat shape:", r_hat.shape)
+            #print("r_hat min:", r_hat.min())
+            #print("r_hat max:", r_hat.max())
+            #print("hat_mean", r_hat.mean())
+            
+            #print("c_t_tot", (c_hat > 0.5).sum())
+            
         
         
         # -- evaluate critic respect lambda return in twohot encoding
@@ -131,7 +137,7 @@ class DreamerAgent(L.LightningModule):
         )
         
         # -- compute actor loss respect lambda_return and v_hat not in twohot encoding
-        actor_l, ema_scale = actor_loss(
+        actor_l, ema_scale, advantage, _ = actor_loss(
             lambda_return, 
             v_hat[:, :-1], 
             a_hat_log_probs[:, :-1], 
@@ -156,7 +162,7 @@ class DreamerAgent(L.LightningModule):
             log_reward = (r_hat[:, :-1] * valid_mask).sum(dim=1) / lengths
             
             # Entropia media
-            log_entropy = (entropy[:, :-1] * valid_mask).sum(dim=1) / lengths
+            log_entropy = entropy
         
         self.log_dict({
             "train_loss"    : loss.item(),
@@ -164,8 +170,9 @@ class DreamerAgent(L.LightningModule):
             "critic_loss"   : critic_l.item(),
             "lambda_return" : log_lambda.mean().item(),
             "mean_reward"   : log_reward.mean().item(),
-            "entropy"       : log_entropy.mean().item(),
-            "ema_scale"     : ema_scale
+            "entropy"       :log_entropy.mean().item(),
+            "ema_scale"     : ema_scale,
+            "advantage"     : advantage
         }, prog_bar=True, on_step=True, on_epoch=False)
 
         return loss
@@ -186,7 +193,7 @@ class DreamerAgent(L.LightningModule):
 
         feature = torch.cat([new_rssm_state.h, new_rssm_state.z], dim=-1)
         
-        dist = self.actor(feature)
+        dist, _, _ = self.actor(feature)
 
         
         action = dist.sample()
@@ -253,7 +260,7 @@ class DreamerAgent(L.LightningModule):
             embed = torch.cat([rssm_state.h, rssm_state.z], dim=-1)
             embed = self.dreamer_model.feat_proj(embed)
             
-            latent_states[:, t] = embed
+            latent_states[:, t] = embed.detach()
 
             # get reward from dreamer model
             _, r_t = self.dreamer_model.predict_reward(embed)
@@ -264,12 +271,12 @@ class DreamerAgent(L.LightningModule):
           
            
             continues[:, t] = c_t.detach()
-            reward[:, t] = r_t
+            reward[:, t] = r_t.detach()
             
             # use actor to predict next action
-            act_t, dist_a = self.actor(embed, mask_actions)
+            act_t, dist_a, entropy = self.actor(embed, mask_actions)
 
-            entropys[:, t] = dist_a.entropy()
+            entropys[:, t] = entropy
             actions_out[:, t] = act_t
             log_probs[:, t] = dist_a.log_prob(act_t)
 

@@ -38,8 +38,7 @@ class Critic(nn.Module):
 
         # -- weighted mean
         pred_symlog = (pred_values_prob * self.buckets).sum(dim=-1)
-        pred_values = symexp(pred_symlog, self.min_buckets, self.max_buckets)
-
+        pred_values = symexp(pred_symlog)
         return pred_values_log, pred_values
         
 

@@ -41,10 +41,10 @@ class EnviromentAdapter:
         latent = torch.cat([self.memory.h, self.memory.z], dim=-1)
         latent = self.agent.dreamer_model.feat_proj(latent)
 
-        _, dist_actions = self.agent.actor(latent, mask_actions)
+        one_hot_action, _, _= self.agent.actor(latent, mask_actions)
         
         # Campionamento One-Hot (Differenziabile o stocastico a seconda dell'Actor)
-        one_hot_action = dist_actions.sample().squeeze(0) # [Global_Dim]
+        
         #print(mask_actions)
         #print(one_hot_action.shape)
         # Otteniamo l'indice globale scelto dall'Actor

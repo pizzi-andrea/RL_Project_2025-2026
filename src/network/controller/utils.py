@@ -18,12 +18,14 @@ class EMAScalar(nn.Module):
         if not self.training:
             return self.scale
         
+    
         with torch.no_grad():
             per_95 = torch.quantile(values, 0.95)
             per_05 = torch.quantile(values, 0.05)
             range_val = (per_95 - per_05).clamp_min(self.eps)
 
             self.scale.mul_(self.decay).add_((1 - self.decay) * range_val)
+          
 
         return self.scale
 
@@ -32,7 +34,7 @@ def symlog(x):
     return torch.sign(x) * torch.log(torch.abs(x) + 1.0)
 
 
-def symexp(x, mm=-20.0, mx=20.0):
+def symexp(x):
     #x = x.clamp(mm, mx)
     return torch.sign(x)*(torch.exp(torch.abs(x)) - 1)
 
@@ -114,16 +116,19 @@ def make_video(frames, output_path, fps=30):
 def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, continues, entropy_scale=3e-4):
     # 1. Calcola la scala (Media Mobile)
     s = ema_scaler(td_return)
+  
+    normalized_advantage = ((td_return - critic_values) / torch.clamp(s, min=1)).detach()
     
-    normalized_advantage = ((td_return - critic_values) / torch.clamp(s, min=1.0)).detach()
     per_step_objective = (normalized_advantage * action_log_prob) + (entropy_scale * entropy)
     masked_objective = per_step_objective * continues
     lengths = continues.sum(dim=1).clamp(min=1.0)
-    final_loss = -(masked_objective.sum(dim=1) / lengths).mean()
+    final_loss = -(masked_objective.sum() / lengths).mean()
+    
     
     ema_scale = s.detach().cpu().numpy().mean()
-    
-    return final_loss, ema_scale
+    avantage = ((normalized_advantage * action_log_prob).detach().sum() / lengths).mean().item()
+    entropy = ((entropy_scale * entropy).detach().sum() / lengths).mean().item()
+    return final_loss, ema_scale, avantage, entropy
 
 def critic_loss(v_hat, target, continues):
     # v_hat: [B, T, Buckets], target: [B, T, Buckets], continues: [B, T]
