@@ -64,18 +64,17 @@ class Actor(nn.Module):
         # 4. Crea distribuzione
         dist = OneHotCategorical(probs=probs)
         action = dist.sample()
-
-        # --- Calcolo Entropia (Unificato) ---
-        # Nota: dist.entropy() a volte è instabile con prob=0, il calcolo manuale è più sicuro con la mask
         
         
         if valid_actions_mask is not None:
-            # Calcolo manuale stabile
             p_log_p = probs * torch.log(probs + 1e-8)
-            
             entropy = -p_log_p.sum(dim=-1)
-        else:
-            entropy = dist.entropy()
+
+            # normalizzazione opzionale
+            num_valid = mask.sum(dim=-1).clamp(min=1.0)
+            max_entropy = torch.log(num_valid)
+            entropy = entropy / (max_entropy + 1e-8)
+
        
         return action, dist, entropy
 

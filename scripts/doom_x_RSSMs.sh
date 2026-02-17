@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 doom_scenarios=("VizdoomCorridor-v0" "VizdoomBasic-v0")
-episodes=(500 500)
+episodes=(8000 2000)
 skip_frame=(1 2)
 
 sticky=("--sticky" "")
