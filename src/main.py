@@ -70,6 +70,7 @@ def main():
         max_epochs=-1,
         limit_val_batches=1,
         log_every_n_steps=10,
+        gradient_clip_val=100,
     )
 
     policy_trainer = Trainer(
@@ -77,6 +78,7 @@ def main():
         callbacks=[StepLimitCallback(config["policy_config"]["train_steps"])],
         max_epochs=-1,
         log_every_n_steps=1,
+        gradient_clip_val=100,
     )
     
     if args.load_weights and Path(config["global_config"]["vae_w"]).exists():
@@ -135,7 +137,11 @@ def main():
                 h_dim               =   config["rssm_config"]["detterministic_latent_dim"],
                 buckets             =   config["rssm_config"]["buckets"],
                 min_buckets         =   config["rssm_config"]["min_buckets"],
-                max_buckets         =   config["rssm_config"]["max_buckets"]
+                max_buckets         =   config["rssm_config"]["max_buckets"],
+                alpha_obs           =   config["rssm_config"]["a_obs"],
+                alpha_att           =   config["rssm_config"]["a_att"],
+                alpha_reward        =   config["rssm_config"]["a_rew"],
+                aplha_continue      =   config["rssm_config"]["a_cont"]
         ) 
     
     if args.load_weights and Path(config["global_config"]["policy_w"]).exists():
@@ -172,7 +178,8 @@ def main():
                 action_name=DoomNames.buttons_names,
                 per_weights=weights,
                 preprocessor=image_processor,
-                chunk_size=config["global_config"]["chunk"]
+                chunk_size=config["global_config"]["chunk"],
+                
             ),
             batch_size=config["rssm_config"]["train_batch"], 
             shuffle=True, 

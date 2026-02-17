@@ -32,19 +32,19 @@ class VAE(L.LightningModule):
             # Layer 1: 3 -> d1
             nn.Conv2d(3, d1, 4, 2, 1),
             nn.BatchNorm2d(d1),
-             nn.ReLU(),
+             nn.SiLU(),
             # Layer 2: d1 -> d2
             nn.Conv2d(d1, d2, 4, 2, 1),
             nn.BatchNorm2d(d2),
-            nn.ReLU(),
+            nn.SiLU(),
             # Layer 3: d2 -> d3
             nn.Conv2d(d2, d3, 4, 2, 1),
             nn.BatchNorm2d(d3),
-             nn.ReLU(),
+             nn.SiLU(),
             # Layer 4: d3 -> d4
             nn.Conv2d(d3, d4, 4, 2, 1),
             nn.BatchNorm2d(d4),
-             nn.ReLU(),
+             nn.SiLU()
         )
 
         # --- DECODER ---
@@ -52,15 +52,15 @@ class VAE(L.LightningModule):
             # Layer 1: d4 -> d3
             nn.ConvTranspose2d(d4, d3, 4, 2, 1, output_padding=(1, 0)), # Note: output_padding tuning might be needed based on exact resolution
             nn.BatchNorm2d(d3),
-            nn.ReLU(),
+            nn.SiLU(),
             # Layer 2: d3 -> d2
             nn.ConvTranspose2d(d3, d2, 4, 2, 1),
             nn.BatchNorm2d(d2),
-            nn.ReLU(),
+            nn.SiLU(),
             # Layer 3: d2 -> d1
             nn.ConvTranspose2d(d2, d1, 4, 2, 1),
             nn.BatchNorm2d(d1),
-            nn.ReLU(),
+            nn.SiLU(),
             # Layer 4: d1 -> 3
             nn.ConvTranspose2d(d1, 3, 4, 2, 1)
         )

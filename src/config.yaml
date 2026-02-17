@@ -1,5 +1,5 @@
 PER_config:
-  buffer_size: 1000000 # 100.000 almeno
+  buffer_size: 100000 # 100.000 almeno
   cache: ".per/"
   
   
@@ -11,7 +11,7 @@ global_config:
   Project_logs: "Project"
   action_shape: 17
   att_shape: 7
-  sample_episods: 500
+  sample_episods: 1000
   img_channels: 3
   img_size_h : 120
   img_size_l : 160
@@ -19,7 +19,7 @@ global_config:
   vae_w: "weights/vae/vae.ckpt"
   dreamer_w: "weights/rssm/rssm.ckpt"
   policy_w : "weights/policy/policy.ckpt"
-  chunk: 64
+  chunk: 74
 
   envs:
 
@@ -27,8 +27,8 @@ global_config:
     - "VizdoomBasic-v0"
 
   envs_episods:
-    - 10
-    - 10
+    - 500
+    - 500
    
 vae_config:
   VAE_dataset_path_train: "Doom4VAE/train" #funny/train
@@ -42,40 +42,44 @@ vae_config:
 rssm_config:
   rssm_dataset_path_train: "Doom4RSSMs/train" #funny/train
   rssm_dataset_path_valid: "Doom4RSSMs/validation" #funny/train
-  train_steps: 100 #100
-  train_batch: 8
-  burn_in: 5
+  train_steps: 1000 #100
+  train_batch: 16
+  burn_in: 10
   free_nats: 1.0
-  min_buckets: -8
-  max_buckets: 8
+  min_buckets: -20
+  max_buckets: 20
+  a_att: 10
+  a_obs: 13
+  a_cont: 10
+  a_rew: 2
   
-  detterministic_latent_dim: 4096
+  detterministic_latent_dim: 2064
   rssm_latent_dim: 512 # b
   common_latent_dim: 512
   stochastic_latent: 32
   stochastic_classes: 32
   buckets: 255
-  unimix: 0.03
+  unimix: 0.01
   beta_dyn: 1.0
   beta_pred: 1.0
-  beta_rep: 0.1
+  beta_rep: 1.0
   lr: 0.00008
 
 
 policy_config:
   policy_dataset_path_train: "Doom4RSSMs/validation" #funny/train
-  train_steps: 100
+  train_steps: 1000
   buckets: 255
-  horizont: 20
-  burn_in: 5
+  horizont: 50
+  burn_in: 10
   lr: 0.00008
-  actor_entropy: 0.001
+  actor_entropy: 0.005
   train_batch: 32
   hidden_dim: 512
   unimix: 0.03
-  ema_decay: 0.98
+  ema_decay: 0.99
   ema_epsilon: 1.0
-  min_buckets: -8
-  max_buckets: 8
+  min_buckets: -20
+  max_buckets: 20
 
 

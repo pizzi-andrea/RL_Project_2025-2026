@@ -7,7 +7,6 @@ from tqdm.auto import tqdm
 from PIL import Image
 from pathlib import Path
 from random_policy import Random_Policy
-from env_info import ATT_PLAYER, GamePad, GLOBAL_BUTTONS, ButtonActionMapper
 import gymnasium
 from doomData import *
 from tofolder import *

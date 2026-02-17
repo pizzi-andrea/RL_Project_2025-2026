@@ -73,8 +73,9 @@ class DreamerAgent(L.LightningModule):
         # def parameters
         #   lr: 0.00003
         #   eps: 1e-20
-        return LaProp(self.parameters(), self.hparams.lr, eps=1e-20)
-
+        
+        return LaProp(self.parameters(), self.hparams.lr)
+    
     def training_step(self, batch, batch_idx):
         """Dreamer traning procedure (burn in + dreamer)"""
         
