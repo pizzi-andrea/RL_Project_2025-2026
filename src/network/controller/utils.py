@@ -110,7 +110,30 @@ def make_video(frames, output_path, fps=30):
     video_writer.release()
     print(f"new video saved in : {output_path}")
 
+def _unitwise_norm(x):
+    if x.ndim <= 1:
+        return x.norm(2)
+    # Per i pesi convoluzionali o lineari, calcoliamo la norma per ogni unità di output
+    return x.norm(2, dim=tuple(range(1, x.ndim)), keepdim=True)
 
+def AGC(parameters, clip_factor=0.01, eps=1e-3):
+    for p in parameters:
+        if p.grad is None:
+            continue
+        p_data = p.detach()
+        g_data = p.grad.detach()
+        
+        p_norm = _unitwise_norm(p_data).clamp_(min=eps)
+        g_norm = _unitwise_norm(g_data)
+        
+       
+        max_norm = p_norm * clip_factor
+        
+        
+        trigger = g_norm > max_norm
+        
+        scaled_g = g_data * (max_norm / g_norm.clamp(min=1e-6))
+        p.grad.data.copy_(torch.where(trigger, scaled_g, g_data))
 
 
 def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, continues, entropy_scale=3e-4):

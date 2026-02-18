@@ -48,9 +48,44 @@ def main():
     validation_log = Path(config["global_config"]["Project_logs"]).joinpath("best_epochs")
     validation_log.mkdir(parents=True, exist_ok=True)
 
+    def robust_preprocessor(x):
+        
+        if len(x.shape) == 3:
+            x = x[np.newaxis,:,:,:]
+        
+        t = []
+        for item in x:
+            lab = cv.cvtColor(item, cv.COLOR_RGB2LAB)
+            l, a, b = cv.split(lab)
+
     
+            clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            cl = clahe.apply(l)
+            
+        
+            limg = cv.merge((cl, a, b))
+            final_img = cv.cvtColor(limg, cv.COLOR_LAB2RGB)
+            t.append(final_img)
+        
+        t = np.stack(t, axis=0)
+        t = torch.from_numpy(t).permute(0, 3, 1, 2).contiguous()
+            
+    def simple_preprocessor(x):
+        if len(x.shape) == 3:
+            x = x[np.newaxis,:,:,:]
+        x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
+        return x
     
-    image_processor = lambda x: torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
+    def simple_preprocessor_float32(x):
+        x = cv.resize(x, (160, 120))
+        if len(x.shape) == 3:
+            x = x[np.newaxis,:,:,:]
+
+        x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
+        x = x.float().div_(255.0).detach()
+        return x
+    
+    image_processor = simple_preprocessor
     log_experiment = Path(config["global_config"]["Project_logs"])
     PER4train = AdversarialReplayPriority(config["PER_config"]["buffer_size"])
 
@@ -59,18 +94,16 @@ def main():
             PER4train.store(episode)
     print(f"**load {len(PER4train)} items in PER buffer**")
     
-    vae_trainer =  Trainer(
-        logger=TensorBoardLogger(log_experiment, name="VAE"), 
-        max_epochs=config["vae_config"]["train_epoch"]
-    )
+    
     
     rssm_trainer = Trainer(
         logger=TensorBoardLogger(log_experiment, name="RSSM"),
         callbacks=[PERAdapter(PER4train), StepLimitCallback(config["rssm_config"]["train_steps"])],
         max_epochs=-1,
-        limit_val_batches=1,
+        limit_val_batches=config["rssm_config"]["batch_acc"],
         log_every_n_steps=10,
         gradient_clip_val=100,
+        accumulate_grad_batches=8,
     )
 
     policy_trainer = Trainer(
@@ -79,22 +112,29 @@ def main():
         max_epochs=-1,
         log_every_n_steps=1,
         gradient_clip_val=100,
+        accumulate_grad_batches=config["policy_config"]["batch_acc"],
+        
     )
     
     if args.load_weights and Path(config["global_config"]["vae_w"]).exists():
         vae_model = VAE.load_from_checkpoint(config["global_config"]["vae_w"])
     else:
-        vae_train_loader = DataLoader(
-            DoomDataset(config["vae_config"]["VAE_dataset_path_train"], 
-                        resize=(config["global_config"]["img_size_h"], config["global_config"]["img_size_l"])), 
-                        batch_size=config["vae_config"]["train_batch"], 
-                        shuffle=False, 
-                        num_workers=os.cpu_count()-1,
-                        persistent_workers=True)
-        vae_valid_loader = DataLoader(DoomDataset(config["vae_config"]["VAE_dataset_path_valid"], resize=(config["global_config"]["img_size_h"],config["global_config"]["img_size_l"])), batch_size=config["vae_config"]["train_batch"], shuffle=False, num_workers=os.cpu_count()-1, persistent_workers=True,)
         vae_model = VAE(latent_dim=config["vae_config"]["latent_dim"], model_dim=config["vae_config"]["model_dim"])
-        vae_trainer.fit(vae_model, vae_train_loader, vae_valid_loader)
-    
+        if config["vae_config"]["train_epoch"] > 0:
+            vae_trainer =  Trainer(
+                logger=TensorBoardLogger(log_experiment, name="VAE"), 
+                max_epochs=config["vae_config"]["train_epoch"]
+            )
+            vae_train_loader = DataLoader(
+                DoomDataset(config["vae_config"]["VAE_dataset_path_train"], 
+                            resize=(config["global_config"]["img_size_h"], config["global_config"]["img_size_l"])), 
+                            batch_size=config["vae_config"]["train_batch"], 
+                            shuffle=False, 
+                            num_workers=os.cpu_count()-1,
+                            persistent_workers=True)
+            vae_valid_loader = DataLoader(DoomDataset(config["vae_config"]["VAE_dataset_path_valid"], resize=(config["global_config"]["img_size_h"],config["global_config"]["img_size_l"])), batch_size=config["vae_config"]["train_batch"], shuffle=False, num_workers=os.cpu_count()-1, persistent_workers=True,)
+            vae_trainer.fit(vae_model, vae_train_loader, vae_valid_loader)
+        
     if args.load_weights and Path(config["global_config"]["dreamer_w"]).exists():
         rssm_model = Dreamer.load_from_checkpoint(config["global_config"]["dreamer_w"],
                 action_dim          =   config["global_config"]["action_shape"], 
@@ -168,6 +208,7 @@ def main():
     print(f"Total steps for DREAMER: {config["global_config"]["sample_episods"]/config["rssm_config"]["train_batch"]}")
     print(f"Total steps for Policy: {config["global_config"]["sample_episods"]/config["policy_config"]["train_batch"]}")
     for epoch in range(1, config["global_config"]["dreamer_iterations"] + 1):
+        print(f"Start epoch iteration {epoch}/{config["global_config"]["dreamer_iterations"]}")
         sampled_episods, priority_idxs, _, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), config["global_config"]["sample_episods"]))
         
         rssm_train_loader = DataLoader(EpisodicDoomDataset(
@@ -206,16 +247,16 @@ def main():
             shuffle=True, 
             collate_fn=collate_fn, 
             num_workers=config["global_config"]["multi_cpu"], 
-            pin_memory=True
+            pin_memory=True,
         )
         
         policy_trainer.fit(agent_model, train_dataloaders=policy_train_loader)
         
         if (epoch > config["global_config"]["warmup"]):
             for env, n in zip(config["global_config"]["envs"], config["global_config"]["envs_episods"]):
-                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=1, max_length=config["global_config"]["max_episode_length"])
+                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=3, max_length=config["global_config"]["max_episode_length"], preprocess=simple_preprocessor_float32)
                 print(f"mean reword collected by policy {reword} in env {env}")
-                create_video_from_frames(best_path.joinpath("obs"), validation_log.joinpath(f"{env}_{epoch}.mp4"), 30)
+                create_video_from_frames(best_path.joinpath("obs"), validation_log.joinpath(f"{env}_{epoch}.mp4"), 15)
                 
         
         torch.cuda.empty_cache()

@@ -242,7 +242,7 @@ class Dreamer(L.LightningModule):
             p.requires_grad = True
     
     def configure_optimizers(self):
-        return LaProp(self.parameters(), self.hparams.lr)
+        return LaProp(self.parameters(), self.hparams.lr, eps=1e-20)
     
     def encode(self, obs, user_att):
         """Encode observation + world attributes"""
@@ -296,12 +296,13 @@ class Dreamer(L.LightningModule):
             "episods_idx":idx_episods, 
             "episods_loss":loss_episods
         }
-    def on_after_backward(self):
-        # Adaptive Gradient Cliping
-        pass#AGC(self.parameters(), clip_factor=0.01)
     
-    def validation_step(self, batch, batch_idx):
-        pass
+    
+    def configure_gradient_clipping(self, optimizer, gradient_clip_val = None, gradient_clip_algorithm = None):
+        AGC(self.parameters(), clip_factor=0.3)
+        
+    
+        
             
     def training_step(self, batch, batch_idx):
         
@@ -315,6 +316,7 @@ class Dreamer(L.LightningModule):
         obs = batch["obs"]
         # normalize observation in [0,1] range
         batch["obs"] = obs.float().div_(255.0).detach()
+        
         
         # train RSSM
         
@@ -368,8 +370,22 @@ class Dreamer(L.LightningModule):
         return {
             "loss": loss,
             "episods_idx": priority_idx,
-            "episods_loss": loss_batch.detach().cpu().numpy()
+            "episods_loss": loss_batch.detach().cpu().numpy(),
+            "x_hat": out["x_hat"][0].detach().cpu(),
+            "x": batch["obs"][0].detach().cpu()
         }
+    
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        obs = outputs["x"]
+        obs_hat = torch.sigmoid(outputs["x_hat"])
+
+        if batch_idx == 0:
+            n = min(obs.size(0), 8)
+            comparison = torch.cat([obs[:n], obs_hat[:n]], dim=0)
+            grid = torchvision.utils.make_grid(comparison, nrow=n)
+            self.logger.experiment.add_image(
+                "val_reconstruction", grid, self.current_epoch
+            )
     
     def forward(self, train_data, burn_indata=None) -> Dict[str, torch.Tensor]:
         obs = train_data["obs"]

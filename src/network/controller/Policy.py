@@ -68,13 +68,16 @@ class DreamerAgent(L.LightningModule):
     #    sample = torch.bernoulli(probs)
     #    return probs + (sample - probs).detach()
     
+    def configure_gradient_clipping(self, optimizer, gradient_clip_val = None, gradient_clip_algorithm = None):
+        AGC(self.parameters(), clip_factor=0.3)
 
+    
     def configure_optimizers(self):
         # def parameters
         #   lr: 0.00003
         #   eps: 1e-20
         
-        return LaProp(self.parameters(), self.hparams.lr)
+        return LaProp(self.parameters(), self.hparams.lr, eps=1e-20)
     
     def training_step(self, batch, batch_idx):
         """Dreamer traning procedure (burn in + dreamer)"""

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
-doom_scenarios=("VizdoomCorridor-v0" "VizdoomBasic-v0")
-episodes=(8000 2000)
-skip_frame=(1 2)
+doom_scenarios=("VizdoomDeadlyCorridor-v1" "VizdoomBasicNotifications-v1" "VizdoomDefendLine-v1")
+episodes=(7000 1000 2000)
+skip_frame=(2 4 4)
 
-sticky=("--sticky" "")
+sticky=("--sticky" "--sticky" "--sticky")
 
 dataset_name="Doom4RSSMs"
 
@@ -21,5 +21,5 @@ for idx in "${!episodes[@]}"; do
     -e "${doom_scenarios[$idx]}" \
     --skip_frame "${skip_frame[$idx]}" \
     $CURRENT_STICKY \
-    -t 2100
+    -t 1200
 done

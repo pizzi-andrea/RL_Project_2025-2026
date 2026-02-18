@@ -34,10 +34,9 @@ class VAEEncoderAdapter(VAEAdapter):
         # Se la dimensione richiesta (es. model_dim del Dreamer) è diversa dal latent del VAE,
         # proiettiamo l'output.
         if out_dim != vae.hparams.latent_dim:
+            print("Enable proj on VAE Encoder")
             self.proj = nn.Sequential(
-                nn.Linear(vae.hparams.latent_dim, out_dim),
-                nn.RMSNorm(out_dim),
-                nn.SiLU()
+                nn.Linear(vae.hparams.latent_dim, out_dim)
             )
             # Inizializzazione coerente con il nuovo VAE
             self._init_weights(self.proj)
@@ -79,11 +78,13 @@ class VAEDecoderAdapter(VAEAdapter):
         self.decode_shape = decode_shape
         
         # Proietta le feature dello stato (h + z) verso la dimensione latent del VAE
-        self.feat_proj = nn.Sequential(
-            nn.Linear(feat_dim, self.vae.hparams.latent_dim),
-            nn.RMSNorm(self.vae.hparams.latent_dim),
-            nn.SiLU()
-        )
+        if feat_dim != self.vae.hparams.latent_dim:
+            print("Enable proj on VAE Decoder")
+            self.feat_proj = nn.Sequential(
+                nn.Linear(feat_dim, self.vae.hparams.latent_dim)
+            )
+        else:
+            self.feat_proj = nn.Identity()
         
         # Inizializzazione coerente con il nuovo VAE
         self._init_weights(self.feat_proj)

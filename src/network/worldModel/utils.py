@@ -71,7 +71,8 @@ def loss_prediction(x_hat, x, r_hat, r, c_hat, c, att_hat, att, mask=None,
     Prediction loss (eq x. paper)
     """
     # loss for observation (graphical)
-    loss_x = F.binary_cross_entropy_with_logits(x_hat, x, reduction='none').mean(dim=(2, 3, 4)) 
+    x_hat_norm = F.sigmoid(x_hat)
+    loss_x = F.mse_loss(x_hat_norm, x, reduction='none').sum(dim=(2, 3, 4)) 
     loss_c = F.binary_cross_entropy_with_logits(c_hat, c, reduction='none')
     # 2. Reward Loss 
 

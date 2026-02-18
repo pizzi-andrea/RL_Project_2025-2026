@@ -8,6 +8,7 @@ from dda import DynamicDataAllocator
 from globals import *
 from math import inf
 from vizdoom import gymnasium_wrapper
+from torchvision.transforms.v2.functional import resize
 import gymnasium
 
 class EnviromentAdapter:
@@ -23,10 +24,12 @@ class EnviromentAdapter:
         self.memory = self.agent.dreamer_model.rssm.init_state(1, self.device)
         
     @no_grad()
-    def act(self, obs:np.ndarray, user_att:list[float], action, mask_actions=None, local_act_order:list[str]=[]):
+    def act(self, obs:np.ndarray, user_att:list[float], action, mask_actions=None, local_act_order:list[str]=[], preprocess=None):
         #self.gamepad.reset()
         
-        frame = F.to_tensor(cv.resize(obs, (160,120))).to(dtype=torch.float32).unsqueeze(0) 
+        if preprocess is not None:
+            frame = preprocess(obs)
+            
         mask_actions = torch.asarray(mask_actions, dtype=torch.bool).unsqueeze(0) 
         user_att_t = torch.tensor(user_att).unsqueeze(0)
         action_t = torch.tensor(action, dtype=torch.float32).unsqueeze(0)
@@ -65,7 +68,7 @@ class EnviromentAdapter:
         return local_action_idx, one_hot_action
     
     @no_grad
-    def act_in_env(self, enviroment_id:str, n_episodes:int=1, frame_skip:int=1, max_length:int=500, multibinary:bool=False):
+    def act_in_env(self, enviroment_id:str, n_episodes:int=1, frame_skip:int=1, max_length:int=500, multibinary:bool=False, preprocess=None):
         
         print(f"current env {enviroment_id}")
         env = gymnasium.make(enviroment_id, render_mode="rgb_array", max_buttons_pressed=1, frame_skip=frame_skip, max_episode_steps=max_length)
@@ -124,7 +127,7 @@ class EnviromentAdapter:
                     att[n] = a
  
                 # Agisci
-                local_action, _ = self.act(s, list(att.values()), action=list(act.values()), mask_actions=act_mask, local_act_order=local_buttons_name)
+                local_action, _ = self.act(s, list(att.values()), action=list(act.values()), mask_actions=act_mask, local_act_order=local_buttons_name, preprocess=preprocess)
                 
             
                 # Esegui step
