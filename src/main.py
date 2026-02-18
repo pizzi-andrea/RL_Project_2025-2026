@@ -87,7 +87,7 @@ def main():
     
     image_processor = simple_preprocessor
     log_experiment = Path(config["global_config"]["Project_logs"])
-    PER4train = AdversarialReplayPriority(config["PER_config"]["buffer_size"])
+    PER4train = CuriosityReplayPriority(config["PER_config"]["buffer_size"])
 
     for bucket in tqdm(Path(config["rssm_config"]["rssm_dataset_path_train"]).iterdir(), desc="load PER buffer"):
         for episode in bucket.iterdir():
@@ -116,24 +116,24 @@ def main():
         
     )
     
-    if args.load_weights and Path(config["global_config"]["vae_w"]).exists():
-        vae_model = VAE.load_from_checkpoint(config["global_config"]["vae_w"])
-    else:
-        vae_model = VAE(latent_dim=config["vae_config"]["latent_dim"], model_dim=config["vae_config"]["model_dim"])
-        if config["vae_config"]["train_epoch"] > 0:
-            vae_trainer =  Trainer(
-                logger=TensorBoardLogger(log_experiment, name="VAE"), 
-                max_epochs=config["vae_config"]["train_epoch"]
-            )
-            vae_train_loader = DataLoader(
-                DoomDataset(config["vae_config"]["VAE_dataset_path_train"], 
-                            resize=(config["global_config"]["img_size_h"], config["global_config"]["img_size_l"])), 
-                            batch_size=config["vae_config"]["train_batch"], 
-                            shuffle=False, 
-                            num_workers=os.cpu_count()-1,
-                            persistent_workers=True)
-            vae_valid_loader = DataLoader(DoomDataset(config["vae_config"]["VAE_dataset_path_valid"], resize=(config["global_config"]["img_size_h"],config["global_config"]["img_size_l"])), batch_size=config["vae_config"]["train_batch"], shuffle=False, num_workers=os.cpu_count()-1, persistent_workers=True,)
-            vae_trainer.fit(vae_model, vae_train_loader, vae_valid_loader)
+    #if args.load_weights and Path(config["global_config"]["vae_w"]).exists():
+        #vae_model = VAE.load_from_checkpoint(config["global_config"]["vae_w"])
+    #else:
+    vae_model = VAE(latent_dim=config["vae_config"]["latent_dim"], model_dim=config["vae_config"]["model_dim"])
+        #if config["vae_config"]["train_epoch"] > 0:
+        #    vae_trainer =  Trainer(
+        #        logger=TensorBoardLogger(log_experiment, name="VAE"), 
+        #        max_epochs=config["vae_config"]["train_epoch"]
+        #    )
+        #    vae_train_loader = DataLoader(
+        #        DoomDataset(config["vae_config"]["VAE_dataset_path_train"], 
+        #                    resize=(config["global_config"]["img_size_h"], config["global_config"]["img_size_l"])), 
+        #                    batch_size=config["vae_config"]["train_batch"], 
+        #                    shuffle=False, 
+        #                    num_workers=os.cpu_count()-1,
+        #                    persistent_workers=True)
+        #    vae_valid_loader = DataLoader(DoomDataset(config["vae_config"]["VAE_dataset_path_valid"], resize=(config["global_config"]["img_size_h"],config["global_config"]["img_size_l"])), batch_size=config["vae_config"]["train_batch"], shuffle=False, num_workers=os.cpu_count()-1, persistent_workers=True,)
+        #    vae_trainer.fit(vae_model, vae_train_loader, vae_valid_loader)
         
     if args.load_weights and Path(config["global_config"]["dreamer_w"]).exists():
         rssm_model = Dreamer.load_from_checkpoint(config["global_config"]["dreamer_w"],
@@ -144,7 +144,7 @@ def main():
                 beta_dyn            =   config["rssm_config"]["beta_dyn"],
                 beta_pred           =   config["rssm_config"]["beta_pred"],
                 beta_rep            =   config["rssm_config"]["beta_rep"],
-                vae                 =   vae_model,
+                #vae                 =   vae_model,
                 burn_in             =    config["rssm_config"]["burn_in"],
                 free_nats           =   config["rssm_config"]["free_nats"],
                 unimix              =   config["rssm_config"]["unimix"],
@@ -210,6 +210,7 @@ def main():
     for epoch in range(1, config["global_config"]["dreamer_iterations"] + 1):
         print(f"Start epoch iteration {epoch}/{config["global_config"]["dreamer_iterations"]}")
         sampled_episods, priority_idxs, _, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), config["global_config"]["sample_episods"]))
+        PER4train.info()
         
         rssm_train_loader = DataLoader(EpisodicDoomDataset(
                 episods=sampled_episods,
@@ -232,7 +233,7 @@ def main():
         rssm_trainer.fit(rssm_model, train_dataloaders=rssm_train_loader)
         
         sampled_episods, priority_idxs, _, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), config["global_config"]["sample_episods"]))
-        
+        PER4train.info()
         policy_train_loader = DataLoader(EpisodicDoomDataset(
                 episods=sampled_episods,
                 per_indexs=priority_idxs,
