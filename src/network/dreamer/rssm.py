@@ -185,7 +185,7 @@ class RSSM(nn.Module): # need specific train loop
         # Unimix Dreamer V3
         
         posterior_probs = unimix_probs(torch.softmax(posterior_logits, dim=-1), unimix=self.unimix)
-        posterior_logits_mix = torch.log(posterior_probs.clamp_min(1e-8))
+        posterior_logits_mix = torch.log_softmax(posterior_probs.clamp_min(1e-8), dim=-1)
         ## --
         
         z_new = st_onehot(posterior_logits_mix)
@@ -195,7 +195,7 @@ class RSSM(nn.Module): # need specific train loop
             h,  
             z_new, 
             state, 
-            posterior_logits_mix, 
+            posterior_logits, 
             prior_logits, 
             mask_t
         )

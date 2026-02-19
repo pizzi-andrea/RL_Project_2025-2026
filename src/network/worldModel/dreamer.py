@@ -300,7 +300,7 @@ class Dreamer(L.LightningModule):
     
     
     def configure_gradient_clipping(self, optimizer, gradient_clip_val = None, gradient_clip_algorithm = None):
-        AGC(self.parameters(), clip_factor=0.3)
+        AGC(self.parameters(), clip_factor=0.03)
         
     
         
@@ -482,7 +482,6 @@ class Dreamer(L.LightningModule):
         ############################################################################
        
        
-
         # feactures vector
         feat = torch.cat([post_h, post_z], dim=-1)     
         feat = self.feat_proj(feat)

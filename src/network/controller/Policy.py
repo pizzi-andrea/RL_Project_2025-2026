@@ -70,7 +70,7 @@ class DreamerAgent(L.LightningModule):
     #    return probs + (sample - probs).detach()
     
     def configure_gradient_clipping(self, optimizer, gradient_clip_val = None, gradient_clip_algorithm = None):
-        AGC(self.parameters(), clip_factor=0.3)
+        AGC(self.parameters(), clip_factor=0.03)
 
     
     def configure_optimizers(self):
@@ -301,8 +301,6 @@ class DreamerAgent(L.LightningModule):
             # get continue flag from model
             c_t = self.dreamer_model.predict_continue(embed)
             
-          
-           
             continues[:, t] = c_t.detach()
             reward[:, t] = r_t.detach()
             
@@ -314,7 +312,9 @@ class DreamerAgent(L.LightningModule):
             log_probs[:, t] = dist_a.log_prob(act_t)
 
             rssm_state, _ = self.rssm.imagine_step(rssm_state, act_t)
-
+            rssm_state.z = rssm_state.z.detach()
+            rssm_state.h = rssm_state.h.detach()
+            rssm_state.z_logits = rssm_state.z_logits.detach()
         
         # -- pack values
         return {
