@@ -1,6 +1,15 @@
 import torch
 import torch.nn.functional as F
 
+def select_data(tensor, is_first, burn_in, T_train):
+                # Se is_first: prendi [0 : T_train]
+                # Se non is_first: prendi [burn_in : burn_in + T_train]
+                out = []
+                for b in range(tensor.shape[0]):
+                    start = 0 if is_first[b] else burn_in
+                    out.append(tensor[b, start : start + T_train])
+                return torch.stack(out)
+
 def kl_logits(q_logits: torch.Tensor, p_logits: torch.Tensor, unimix: float = 0.01) -> torch.Tensor:
     """
     KL(q || p) for categorical distribution with 1% Uniform Mixing.
@@ -71,10 +80,10 @@ def loss_prediction(x_hat, x, r_hat, r, c_hat, c, att_hat, att, mask=None,
     Prediction loss (eq x. paper)
     """
     # loss for observation (graphical)
-    x_hat_norm = F.sigmoid(x_hat)
-    loss_x = F.mse_loss(x_hat_norm, x, reduction='none').sum(dim=(2, 3, 4)) 
+    #x_hat = F.sigmoid(x_hat)
+    loss_x = F.binary_cross_entropy_with_logits(x_hat, x, reduction='none').mean(dim=(2,3,4))   
     loss_c = F.binary_cross_entropy_with_logits(c_hat, c, reduction='none')
-    # 2. Reward Loss 
+    # 2. Reward Loss  
 
     loss_r = reward_loss(r_hat, r, mask) 
     loss_att = symlog_loss(att_hat, att, mask)

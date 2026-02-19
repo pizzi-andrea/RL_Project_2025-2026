@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from timm.optim.laprop import LaProp
 from torch.optim import Adam
+import torchvision
 from ..worldModel.dreamer import Dreamer
 from .utils import *
 from .Actor import Actor
@@ -25,9 +26,9 @@ class DreamerAgent(L.LightningModule):
                  unimix:float= 0.01, 
                  ema_decay:float= 0.98, 
                  ema_epsilon:float= 1e-6, 
-                 lr=0.001, hidden_dim:int=1024, one_hot:bool=True):
+                 lr=0.001, hidden_dim:int=1024, preprocess_callback=None):
         super().__init__()
-        self.save_hyperparameters(ignore=["dreamer_model"])
+        self.save_hyperparameters(ignore=['dreamer_model', 'preprocess_callback'])
         # import dreamer model or weigths
         
         if isinstance(dreamer_model, str):
@@ -35,7 +36,7 @@ class DreamerAgent(L.LightningModule):
         else:
             self.dreamer_model = dreamer_model
         
-        
+        self.preprocess_callback = preprocess_callback
 
         # -- configure hyper-parameters
         self.rssm = self.dreamer_model.rssm
@@ -82,21 +83,37 @@ class DreamerAgent(L.LightningModule):
     def training_step(self, batch, batch_idx):
         """Dreamer traning procedure (burn in + dreamer)"""
         
-        # -- unpack data
-        obs     = batch["obs"][:, 0:self.burn_in]
-        actions = batch["action"][:, 0:self.burn_in]
-        user_att = batch["user_att"][:, 0:self.burn_in]
-        mask     = batch["mask"][:, 0:self.burn_in]
-        mask_a   = batch["mask_action"]
+      
 
+        if self.preprocess_callback is not None:
+            batch["obs"] = self.preprocess_callback(batch["obs"])
         self.ema = self.ema.train()
 
-        # normalize and convert standard image in float32 tensor
-        if obs.dtype == torch.uint8:
-            obs = obs.float().div_(255.0).detach()
+        # -- unpack data
+        is_first = batch["is_first"] # [B]
+        
+        # Usiamo burn_in frame per stabilizzare l'RSSM
+        # Se is_first è True, i dati devono partire dal frame 0
+        if batch["obs"].shape[1] > self.burn_in:
+            obs = batch["obs"][:, :self.burn_in]
+            actions = batch["action"][:, :self.burn_in]
+            user_att = batch["user_att"][:, :self.burn_in]
+            mask = batch["mask"][:, :self.burn_in]
+        else:
+            # Fallback per sequenze corte
+            obs = batch["obs"]
+            actions = batch["action"]
+            user_att = batch["user_att"]
+            mask = batch["mask"]
+            
+        mask_a = batch["mask_action"]
 
-        # generate new immaginary trajectory using rssm model
-        output = self.forward(obs, actions, user_att, mask, mask_a)
+        
+
+        # Passiamo is_first al forward per il reset
+        output = self.forward(obs, actions, user_att, is_first, mask, mask_a)
+
+       
 
         # -- unpack output
         states_hat = output["imagination"]
@@ -179,30 +196,41 @@ class DreamerAgent(L.LightningModule):
             "advantage"     : advantage
         }, prog_bar=True, on_step=True, on_epoch=False)
 
-        return loss
+        return {
+            
+            "loss": loss,
+            "imagination": output["imagination"][0]
+        }
+    
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        obs = outputs["imagination"]
+        obs = self.dreamer_model.predict_obs(obs)
+        obs = torch.sigmoid(obs)
+
+        if batch_idx == 0:
+            n = min(obs.size(0), 5)
+            comparison = obs
+            grid = torchvision.utils.make_grid(comparison, nrow=n)
+            self.logger.experiment.add_image(
+                "val_reconstruction", grid, self.current_epoch
+            )
         
-    def act(self, obs, att_user, old_act, rssm_state):
+    def act(self, obs, att_user, old_act, rssm_state, mask_actions=None):
         """Single step agent action"""
 
-        # -- define virtual batch
-        obs_t = obs.unsqueeze(0).unsqueeze(0)
-        att_t = att_user.unsqueeze(0).unsqueeze(0)
-
-        enc_embed = self.dreamer_model.encode(obs_t, att_t)
-
-        action_input = old_act.unsqueeze(0)
-        embed_input = enc_embed.squeeze(1)
-
-        new_rssm_state, _ = self.rssm.observe_step(rssm_state, action_input, embed_input)
+        embed_input = self.dreamer_model.encode(obs, att_user)
+        
+        new_rssm_state, _ = self.rssm.observe_step(rssm_state, old_act, embed_input)
 
         feature = torch.cat([new_rssm_state.h, new_rssm_state.z], dim=-1)
+        feature = self.dreamer_model.feat_proj(feature)
         
-        dist, _, _ = self.actor(feature)
+        action, _, _ = self.actor(feature, mask_actions)
 
         
-        action = dist.sample()
+        
 
-        action_numpy = action.squeeze(0).cpu().detach().numpy().astype(np.int32)
+        action_numpy = action.squeeze(0).cpu().detach().numpy().astype(np.uint8)
         return action_numpy, new_rssm_state
     
     def validation_step(self, batch, batch_idx):
@@ -216,11 +244,11 @@ class DreamerAgent(L.LightningModule):
             #video_path = Path(self.logger.log_dir).joinpath(f"train_dream_epoch_{self.current_epoch}.avi")
             #make_video(decoded_logits, video_path, fps=30)
         
-    def forward(self, obs, action, user_att, mask=None, mask_actions=None, rssm_state=None):
+    def forward(self, obs, action, user_att,is_first, mask=None, mask_actions=None, rssm_state=None) :
         
         B, _, _, _, _ = obs.shape
         # -- encode attribute player with obs
-        
+        mask_first = is_first.unsqueeze(-1).float().to(self.device)
         # -- fuse obs with user att, use simple cat fusion
         enc = self.dreamer_model.encode(obs, user_att)
 
@@ -241,21 +269,22 @@ class DreamerAgent(L.LightningModule):
 
         with torch.no_grad():
             for t in range(burn_in):
+                rssm_state.h = rssm_state.h * (1.0 - mask_first)
+                rssm_state.z = rssm_state.z * (1.0 - mask_first)
                 enc_t = enc[:, t]
                 action_t = action[:, t]
                 m = mask[:, t]
                 rssm_state, _ = self.rssm.observe_step(rssm_state, action_t, enc_t, m)
         
         # -- for security detach gradients
-        z = rssm_state.z.detach()
-        h = rssm_state.h.detach()
-        z_log = rssm_state.z_logits.detach()
+        # RESET FINALE prima dell'immaginazione
+        rssm_state.h = rssm_state.h * (1.0 - mask_first)
+        rssm_state.z = rssm_state.z * (1.0 - mask_first)
         
-        # -- re-assemble states
-        rssm_state.z = z
-        rssm_state.h = h 
-        rssm_state.z_logits = z_log
-
+        # Detach per non propagare gradienti dell'Actor nel World Model (Dreamer standard)
+        rssm_state.z = rssm_state.z.detach()
+        rssm_state.h = rssm_state.h.detach()
+        rssm_state.z_logits = rssm_state.z_logits.detach()
 
         # -- immagination using rssm
         for t in range(self.horizont):

@@ -91,6 +91,7 @@ class EpisodicDoomDataset(Dataset):
        
         actions = metadata[self.action_name].to_numpy(dtype=np.uint8)
         att_player = metadata[self.att_name].to_numpy(dtype=np.uint8)
+        is_first_val = (metadata["ids"].iloc[0] == 0)
         
         
         obs_path = metadata["path_obs"]
@@ -117,7 +118,8 @@ class EpisodicDoomDataset(Dataset):
             "done": dones,
             "user_att": att_player,
             "priority_idx": priority,
-            "mask_action": mask_action
+            "mask_action": mask_action,
+            "is_first": is_first_val
         }
 
         if self.preprocessor is not None:
@@ -141,6 +143,7 @@ def collate_fn(batch):
     batch_idx = torch.stack( [torch.as_tensor(b["priority_idx"],dtype=torch.uint32) for b in batch])
     batch_mask = torch.stack( [torch.as_tensor(b["mask_action"],dtype=torch.bool) for b in batch])
     batch_weight = torch.stack([torch.as_tensor(b["weight"],dtype=torch.float32) for b in batch])
+    batch_is_first = torch.stack([torch.as_tensor(b["is_first"],dtype=torch.bool) for b in batch])
     
  
     obs = pad_sequence(batch_obs, batch_first=True)
@@ -164,7 +167,8 @@ def collate_fn(batch):
         "user_att": user_att,
         "priority_idx": batch_idx,
         "weight": batch_weight,
-        "mask_action": batch_mask
+        "mask_action": batch_mask,
+        "is_first": batch_is_first
     }
 
 def collect_episods_from_buffer(buffer:PriorityExperienceReplay, max_dim:int=5000):

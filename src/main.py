@@ -15,6 +15,8 @@ from network.controller.Policy import DreamerAgent
 from network.encoder.VAE import VAE
 from network.worldModel.dreamer import Dreamer
 from network.adapters import PERAdapter
+from torchvision.transforms.v2 import *
+from torchvision.transforms import InterpolationMode
 from priority_functions import (
     AdversarialReplayPriority,
     CountBasedPriority,
@@ -22,7 +24,7 @@ from priority_functions import (
 )
 import warnings
 from lightning.pytorch.callbacks import Callback
-
+from lightning.pytorch.callbacks import RichProgressBar
 class StepLimitCallback(Callback):
     def __init__(self, steps_per_round):
         super().__init__()
@@ -31,8 +33,10 @@ class StepLimitCallback(Callback):
 
     def on_train_start(self, trainer, pl_module):
         self.target_step = trainer.global_step + self.steps_per_round
+       
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+
         if trainer.global_step >= self.target_step:
             trainer.should_stop = True
 
@@ -47,7 +51,7 @@ def main():
         config = safe_load(file)
     validation_log = Path(config["global_config"]["Project_logs"]).joinpath("best_epochs")
     validation_log.mkdir(parents=True, exist_ok=True)
-
+    obs_size = (config["global_config"]["img_size_h"], config["global_config"]["img_size_l"])
     def robust_preprocessor(x):
         
         if len(x.shape) == 3:
@@ -69,25 +73,48 @@ def main():
         
         t = np.stack(t, axis=0)
         t = torch.from_numpy(t).permute(0, 3, 1, 2).contiguous()
-            
+    
+    # dataset preprocess
     def simple_preprocessor(x):
         if len(x.shape) == 3:
             x = x[np.newaxis,:,:,:]
         x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
         return x
     
+    
+    def simple_post_processor(x):
+        x = x[100:, 54:267]
+        x = cv.resize(x, obs_size, interpolation=cv.INTER_NEAREST)
+        return x
+
     def simple_preprocessor_float32(x):
-        x = cv.resize(x, (160, 120))
+        x = x[100:, 54:267]
+        x = cv.resize(x, obs_size, interpolation=cv.INTER_NEAREST)
         if len(x.shape) == 3:
             x = x[np.newaxis,:,:,:]
 
+############################################################
         x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
         x = x.float().div_(255.0).detach()
         return x
     
+
+    base_callback = Compose([
+        ToDtype(torch.float32, scale=True),
+        
+        
+    ])
     image_processor = simple_preprocessor
     log_experiment = Path(config["global_config"]["Project_logs"])
-    PER4train = CuriosityReplayPriority(config["PER_config"]["buffer_size"])
+    PER4train = CuriosityReplayPriority(
+        config["PER_config"]["buffer_size"], 
+        
+        alpha=config["curiosity_config"]["alpha"],
+        beta=config["curiosity_config"]["beta"],
+        eps=config["curiosity_config"]["eps"],
+        p_max=config["curiosity_config"]["p_max"],
+        c=config["curiosity_config"]["c"]
+        )
 
     for bucket in tqdm(Path(config["rssm_config"]["rssm_dataset_path_train"]).iterdir(), desc="load PER buffer"):
         for episode in bucket.iterdir():
@@ -98,21 +125,21 @@ def main():
     
     rssm_trainer = Trainer(
         logger=TensorBoardLogger(log_experiment, name="RSSM"),
-        callbacks=[PERAdapter(PER4train), StepLimitCallback(config["rssm_config"]["train_steps"])],
+        callbacks=[PERAdapter(PER4train), StepLimitCallback(config["rssm_config"]["train_steps"]), RichProgressBar(leave=True)],
         max_epochs=-1,
         limit_val_batches=config["rssm_config"]["batch_acc"],
-        log_every_n_steps=10,
-        gradient_clip_val=100,
-        accumulate_grad_batches=8,
+        log_every_n_steps=1,
+        accumulate_grad_batches=config["rssm_config"]["batch_acc"],
+        precision=config["global_config"]["precision"]
     )
 
     policy_trainer = Trainer(
         logger=TensorBoardLogger(log_experiment, name="Policy"),
-        callbacks=[StepLimitCallback(config["policy_config"]["train_steps"])],
+        callbacks=[StepLimitCallback(config["policy_config"]["train_steps"]), RichProgressBar(leave=True)],
         max_epochs=-1,
         log_every_n_steps=1,
-        gradient_clip_val=100,
         accumulate_grad_batches=config["policy_config"]["batch_acc"],
+        precision=config["global_config"]["precision"]
         
     )
     
@@ -155,7 +182,9 @@ def main():
                 h_dim               =   config["rssm_config"]["detterministic_latent_dim"],
                 buckets             =   config["rssm_config"]["buckets"],
                 min_buckets         =   config["rssm_config"]["min_buckets"],
-                max_buckets         =   config["rssm_config"]["max_buckets"]                
+                max_buckets         =   config["rssm_config"]["max_buckets"],
+
+                preprocess_callback=base_callback            
         )
     else:
         rssm_model = Dreamer(
@@ -181,35 +210,59 @@ def main():
                 alpha_obs           =   config["rssm_config"]["a_obs"],
                 alpha_att           =   config["rssm_config"]["a_att"],
                 alpha_reward        =   config["rssm_config"]["a_rew"],
-                aplha_continue      =   config["rssm_config"]["a_cont"]
+                aplha_continue      =   config["rssm_config"]["a_cont"],
+                
+                preprocess_callback=base_callback
         ) 
     
     if args.load_weights and Path(config["global_config"]["policy_w"]).exists():
-        agent_model = DreamerAgent.load_from_checkpoint(config["global_config"]["policy_w"], dreamer_model=rssm_model)
+        agent_model = DreamerAgent.load_from_checkpoint(config["global_config"]["policy_w"], 
+                    dreamer_model       =   rssm_model, 
+                    action_space_dim    =   config["global_config"]["action_shape"],
+                    horizont            =   config["policy_config"]["horizont"],
+                    burn_in             =   config["policy_config"]["burn_in"],
+                    lr                  =   config["policy_config"]["lr"],
+                    entropy_coef        =   config["policy_config"]["actor_entropy"],
+                    bukets              =   config["policy_config"]["buckets"],
+                    hidden_dim          =   config["policy_config"]["hidden_dim"],
+                    unimix              =   config["policy_config"]["unimix"],
+                    ema_decay           =   config["policy_config"]["ema_decay"],
+                    ema_epsilon         =   config["policy_config"]["ema_epsilon"],
+                    min_buckets         =   config["policy_config"]["min_buckets"],
+                    max_buckets         =   config["policy_config"]["max_buckets"],
+                    preprocess_callback =   base_callback,
+        
+        )
     else:
         agent_model = DreamerAgent(
-                    rssm_model, 
-                    action_space_dim=config["global_config"]["action_shape"],
-                    horizont=config["policy_config"]["horizont"],
-                    burn_in=config["policy_config"]["burn_in"],
-                    lr=config["policy_config"]["lr"],
-                    entropy_coef=config["policy_config"]["actor_entropy"],
-                    bukets=config["policy_config"]["buckets"],
-                    hidden_dim=config["policy_config"]["hidden_dim"],
-                    unimix=config["policy_config"]["unimix"],
-                    ema_decay=config["policy_config"]["ema_decay"],
-                    ema_epsilon=config["policy_config"]["ema_epsilon"],
+                    dreamer_model       =   rssm_model, 
+                    action_space_dim    =   config["global_config"]["action_shape"],
+                    horizont            =   config["policy_config"]["horizont"],
+                    burn_in             =   config["policy_config"]["burn_in"],
+                    lr                  =   config["policy_config"]["lr"],
+                    entropy_coef        =   config["policy_config"]["actor_entropy"],
+                    bukets              =   config["policy_config"]["buckets"],
+                    hidden_dim          =   config["policy_config"]["hidden_dim"],
+                    unimix              =   config["policy_config"]["unimix"],
+                    ema_decay           =   config["policy_config"]["ema_decay"],
+                    ema_epsilon         =   config["policy_config"]["ema_epsilon"],
                     min_buckets         =   config["policy_config"]["min_buckets"],
-                    max_buckets         =   config["policy_config"]["max_buckets"]
+                    max_buckets         =   config["policy_config"]["max_buckets"],
+                    preprocess_callback=base_callback,
                     
         )
     
-    envs = EnviromentAdapter(agent_model, DynamicDataAllocator(config["PER_config"]["cache"], PER4train))
-    print(f"Total steps for DREAMER: {config["global_config"]["sample_episods"]/config["rssm_config"]["train_batch"]}")
-    print(f"Total steps for Policy: {config["global_config"]["sample_episods"]/config["policy_config"]["train_batch"]}")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    envs = EnviromentAdapter(
+        agent_model, 
+        DynamicDataAllocator(config["PER_config"]["cache"], 
+        PER4train), device=device
+    )
+    print(f"Total steps for DREAMER: {config["rssm_config"]["sample_episods"]/config["rssm_config"]["train_batch"]}")
+    print(f"Total steps for Policy: {config["policy_config"]["sample_episods"]/config["policy_config"]["train_batch"]}")
     for epoch in range(1, config["global_config"]["dreamer_iterations"] + 1):
         print(f"Start epoch iteration {epoch}/{config["global_config"]["dreamer_iterations"]}")
-        sampled_episods, priority_idxs, _, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), config["global_config"]["sample_episods"]))
+        sampled_episods, priority_idxs, _, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), config["rssm_config"]["sample_episods"]))
         PER4train.info()
         
         rssm_train_loader = DataLoader(EpisodicDoomDataset(
@@ -232,7 +285,7 @@ def main():
 
         rssm_trainer.fit(rssm_model, train_dataloaders=rssm_train_loader)
         
-        sampled_episods, priority_idxs, _, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), config["global_config"]["sample_episods"]))
+        sampled_episods, priority_idxs, _, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), config["policy_config"]["sample_episods"]))
         PER4train.info()
         policy_train_loader = DataLoader(EpisodicDoomDataset(
                 episods=sampled_episods,
@@ -255,7 +308,7 @@ def main():
         
         if (epoch > config["global_config"]["warmup"]):
             for env, n in zip(config["global_config"]["envs"], config["global_config"]["envs_episods"]):
-                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=3, max_length=config["global_config"]["max_episode_length"], preprocess=simple_preprocessor_float32)
+                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=2, max_length=config["global_config"]["max_episode_length"], preprocess=simple_preprocessor_float32, post_process=simple_post_processor)
                 print(f"mean reword collected by policy {reword} in env {env}")
                 create_video_from_frames(best_path.joinpath("obs"), validation_log.joinpath(f"{env}_{epoch}.mp4"), 15)
                 

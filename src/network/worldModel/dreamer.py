@@ -33,7 +33,6 @@ class Dreamer(L.LightningModule):
         buckets:int = 255,
         min_buckets:int=-20,
         max_buckets:int=20,
-        validation_steps:int = 30,
         lr: float = 3e-4,
         beta_pred: float = 1.0,
         beta_dyn: float = 1.0,
@@ -47,11 +46,12 @@ class Dreamer(L.LightningModule):
         unimix: float = 0.01,
         # --- nuove opzioni VAE --- 
         vae: Optional[str]|VAE|None = None,
+        preprocess_callback=None
         
         # se vuoi che enc_x sia esattamente latent_dim del VAE, imposta enc_dim=vae_latent_dim
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=['vae'])
+        self.save_hyperparameters(ignore=['vae', 'preprocess_callback'])
         self.min_buckets = min_buckets
         self.max_buckets = max_buckets
 
@@ -70,6 +70,7 @@ class Dreamer(L.LightningModule):
             unimix=unimix,
         )
 
+        self.preprocess_callback = preprocess_callback
         rssm_feat_dim = h_dim + (stoch_latents * stoch_classes) # h_dim + L*K
         self.internal_hidden_dim  = internal_hidden_dim
         self.burn_in = burn_in
@@ -91,8 +92,8 @@ class Dreamer(L.LightningModule):
 
         self.att_encoder = nn.Sequential(
             nn.Linear(att_dim, out_features=internal_hidden_dim),
-            nn.RMSNorm(internal_hidden_dim),
-            nn.SiLU()
+            #nn.RMSNorm(internal_hidden_dim),
+            #nn.SiLU()
         )
 
         self.encoder_proj = nn.Sequential(
@@ -312,16 +313,15 @@ class Dreamer(L.LightningModule):
         # masks not required grads
         batch["mask_action"] =  batch["mask_action"].detach()
         batch["mask"] = batch["mask"].detach()
-        # unpack data
-        obs = batch["obs"]
+    
         # normalize observation in [0,1] range
-        batch["obs"] = obs.float().div_(255.0).detach()
-        
-        
-        # train RSSM
+        if self.preprocess_callback is not None:
+            batch["obs"] = self.preprocess_callback(batch["obs"])
+       
+        is_first = batch["is_first"] # [B] Tensor bool
         
         if batch["obs"].shape[1] > self.burn_in:
-            
+            # 1. Burn Data: prendiamo sempre i primi 'burn_in' frame
             burn_data = {
                 "obs": batch["obs"][:, :self.burn_in],
                 "action": batch["action"][:, :self.burn_in],
@@ -329,20 +329,27 @@ class Dreamer(L.LightningModule):
                 "mask": batch["mask"][:, :self.burn_in]
             }
             
+            
+            
+            T_total = batch["obs"].shape[1]
+            T_train = T_total - self.burn_in
+            
+            
+
             train_data = {
-                    "obs": batch["obs"][:, self.burn_in:],
-                    "action": batch["action"][:, self.burn_in:],
-                    "user_att": batch["user_att"][:, self.burn_in:],
-                    "mask": batch["mask"][:,self.burn_in:],
-                    "continue": batch["continue"][:, self.burn_in:],
-                    "reward": batch["reward"][:, self.burn_in:],
-                    "priority_idx": batch["priority_idx"],
-                    #"mask_action": batch["mask_action"][:,self.burn_in:],
-                    "weight": batch["weight"]
-                }
+                "obs":      select_data(batch["obs"], is_first, self.burn_in, T_train),
+                "action":   select_data(batch["action"], is_first, self.burn_in, T_train),
+                "user_att": select_data(batch["user_att"], is_first, self.burn_in, T_train),
+                "mask":     select_data(batch["mask"], is_first, self.burn_in, T_train),
+                "continue": select_data(batch["continue"], is_first, self.burn_in, T_train),
+                "reward":   select_data(batch["reward"], is_first, self.burn_in, T_train),
+                "is_first": is_first, # Passalo al forward per il reset dello stato
+                "weight":   batch["weight"]
+            }
         else:
-            burn_data = None
             train_data = batch
+            burn_data = None
+            
 
         out = self.forward(train_data, burn_data)
         
@@ -387,11 +394,16 @@ class Dreamer(L.LightningModule):
                 "val_reconstruction", grid, self.current_epoch
             )
     
+
+
+    
+    
     def forward(self, train_data, burn_indata=None) -> Dict[str, torch.Tensor]:
         obs = train_data["obs"]
         
+        
         B, T, _, _, _ = obs.shape
-
+        is_first = train_data["is_first"]
         # -- init memory
         state = self.rssm.init_state(B, device=obs.device)
         burn_in = self.burn_in if self.training else 0
@@ -415,6 +427,9 @@ class Dreamer(L.LightningModule):
                     x_t = self.encode(obs_t, att_t)
                     
                     # Step RSSM (aggiorna solo lo stato)
+                    mask_first = is_first.unsqueeze(-1).float()
+                    state.h = state.h * (1.0 - mask_first)
+                    state.z = state.z * (1.0 - mask_first)
                     state, _ = self.rssm.observe_step(state, a_t, x_t, m_t)
             
             z = state.z.detach()
@@ -424,6 +439,11 @@ class Dreamer(L.LightningModule):
             state.z = z
             state.h = h 
             state.z_logits = z_log
+        #####################################################################
+       
+        mask_first = is_first.unsqueeze(-1).float()
+        state.h = state.h * (1.0 - mask_first)
+        state.z = state.z * (1.0 - mask_first)
        
         # -- store temp data
         actions = train_data["action"]
@@ -443,6 +463,8 @@ class Dreamer(L.LightningModule):
         post_logits = torch.zeros(B, T, L, K, device=obs.device)
         prior_logits = torch.zeros(B, T, L, K, device=obs.device)
 
+        # compute real length for data and ingnore padding during iteration
+        
         
         # -- compute loss
         for t in range(T):
@@ -457,7 +479,7 @@ class Dreamer(L.LightningModule):
             post_z[:, t] = state.z
             post_logits[:, t] = state.z_logits
             prior_logits[:, t] = plogits
-
+        ############################################################################
        
        
 

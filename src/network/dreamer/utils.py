@@ -9,21 +9,7 @@ def unimix_probs(probs: torch.Tensor, unimix: float = 0.01) -> torch.Tensor: #un
     return (1 - unimix) * probs + unimix * (torch.ones_like(probs) / K)
 
 def st_onehot(logits: torch.Tensor) -> torch.Tensor:
-    
-    #  Straight-through
-    
-    probs = torch.softmax(logits, dim=-1)
-    
-    with torch.no_grad():
-        
-        shape = probs.shape
-        probs_flat = probs.view(-1, shape[-1])
-        idx = torch.multinomial(probs_flat, num_samples=1).view(shape[:-1])
-        
-        # one-hot encoding
-        y_hard = F.one_hot(idx, num_classes=shape[-1]).float()
-    
-    return y_hard + (probs - probs.detach())
+    return torch.nn.functional.gumbel_softmax(logits, tau=1.0, hard=True, dim=-1)
 def logits2discrate(logits: torch.Tensor, L:int, K:int, unimix=0.01) -> tuple[torch.Tensor, torch.Tensor]: #conversion logit-> discrete z
         # logits: [B,L*K] -> [B,L,K]
         logits = logits.view(-1, L, K)

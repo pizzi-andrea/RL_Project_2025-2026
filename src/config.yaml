@@ -7,81 +7,92 @@ PER_config:
 global_config:
   multi_cpu: 24
   max_episode_length: 1200
-  warmup: 0
+  warmup: 1
   Project_logs: "Project"
   action_shape: 17
   att_shape: 7
-  sample_episods: 1000
+  
   img_channels: 3
-  img_size_h : 120
-  img_size_l : 160
-  dreamer_iterations: 100
+  img_size_h : 64
+  img_size_l : 64
+  dreamer_iterations: 65
   # vae_w: "weights/vae/vae.ckpt"
   dreamer_w: "weights/rssm/rssm.ckpt"
   policy_w : "weights/policy/policy.ckpt"
-  chunk: 64
+  chunk: 120
+  precision: "32-true" # Double precision (64, '64' or '64-true'), full precision (32, '32' or '32-true'), 16bit mixed precision (16, '16', '16-mixed') bfloat16('bf16', 'bf16-mixed'). Default: '32-true'.
 
   envs:
 
-    - "VizdoomDeadlyCorridor-v1"
-    - "VizdoomBasicNotifications-v1"
-    - "VizdoomDefendLine-v1"
+    #- "VizdoomDeadlyCorridor-v1"
+    #- "VizdoomBasicNotifications-v1"
+    # - "VizdoomHealthGathering-v1"
+    #- "VizdoomDefendLine-v1"
+    - "VizdoomBasic-v1"
 
   envs_episods:
-    - 500
+    #- 500
+    #- 100
     - 100
-    - 500
+    #- 100
    
 vae_config:
-  latent_dim: 768
-  model_dim: 768
+  latent_dim: 1024
+  model_dim: 1024
   # VAE_dataset_path_train: "Doom4VAE/train" #funny/train
   # VAE_dataset_path_valid: "Doom4VAE/validation" #funny/valid
   # train_epoch: 0 #25
   # train_batch: 64
-  
+
+curiosity_config:
+  alpha: 0.8  
+  beta: 0.1   
+  eps: 0.003
+  p_max: 10   
+  c: 0.01     
 
 
 rssm_config:
+  sample_episods: 128
   rssm_dataset_path_train: "Doom4RSSMs/train" #funny/train
-  train_steps: 1000 #100
+  train_steps: 50 #100
   train_batch: 8 # train batch
   burn_in: 10
   free_nats: 1.0
   min_buckets: -20
   max_buckets: 20
-  batch_acc: 8
   a_att: 1
-  a_obs: 0.01
-  a_cont: 10
+  a_obs: 1
+  a_cont: 1
   a_rew: 1
   
-  detterministic_latent_dim: 4012
-  rssm_latent_dim: 768 # b
-  common_latent_dim: 768
+  detterministic_latent_dim: 5192 
+  rssm_latent_dim: 1024 # b
+  common_latent_dim: 1024
   stochastic_latent: 64
   stochastic_classes: 64
-  batch_acc: 8
+  batch_acc: 1
   buckets: 255
   unimix: 0.01
   beta_dyn: 1.0
   beta_pred: 1.0
   beta_rep: 0.1
-  lr: 0.00008
+  lr: 0.0008
 
 
 policy_config:
-  train_steps: 1000
+  sample_episods: 128
+  train_steps: 20
   buckets: 255
-  horizont: 30
+  horizont: 15
   burn_in: 10
-  lr: 0.00008
-  actor_entropy: 0.005
-  train_batch: 32
+  lr: 0.0008
+  actor_entropy: 0.01
+  train_batch: 64
   batch_acc: 1
-  hidden_dim: 768
-  unimix: 0.03
-  ema_decay: 0.99
+  hidden_dim: 1024
+  unimix: 0.01
+  ema_decay: 0.98
   ema_epsilon: 1.0
   min_buckets: -20
   max_buckets: 20

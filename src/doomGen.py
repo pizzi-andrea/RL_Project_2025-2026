@@ -31,6 +31,7 @@ if __name__ == "__main__":
     parser.add_argument("--resolution_h", required=False, default=120, type=int)
     parser.add_argument("--resolution_w", required=False, default=160, type=int)
     parser.add_argument("--multibinary", required=False, action="store_true")
+    parser.add_argument("--crop", required=False, action="store_true")
     bucket_size = 500
     buckets = []
     
@@ -104,80 +105,68 @@ if __name__ == "__main__":
     print("Local attribute dected", local_stat_name)
     print("buttons mask dected:", act_mask)
     
-    
     for episode in tqdm(range(init_episode, init_episode + args.episods)):
-        
         ids = 0
-        #gamepad.reset()
         game, _ = env.reset()
         s = game["screen"]
-        game_info = game["gamevariables"]
+        game_info = game["gamevariables"] # Attributi al tempo t
         
-        action = env.action_space.sample()
         done = False
-        reward = 0
-        act = OrderedDict()
         act_counter = 0
-        act_old = action
+        act_old = env.action_space.sample()
+        
         while not done:
-            
-            # -- encode buttons in global map 
-            
-            #assert env.action_space.contains(action) 
-            
-            if not args.multibinary:
-                global_idx = DoomMap.reindex_categorical(local_buttons_name[action], DoomNames.buttons_names)
-                act_one_hot = DoomMap.one_hot(global_idx, n_classes=len(DoomNames.buttons_names))
-            else:
-                act_one_hot = action
-            
-
-            
-            for n, v in zip(DoomNames.buttons_names, act_one_hot):
-                act[n] = v
-            
-            att = OrderedDict.fromkeys(DoomNames.att_player_names, 0)
-            for a, n in zip(game_info, local_stat_name):
-                att[n] = a
-                
-            
-
-            # ---------- action ----------
-            if  act_counter > sticky:
+            # 1. Selezione Azione a_t
+            if act_counter > sticky:
                 action = env.action_space.sample()
                 act_old = action
                 act_counter = 0
             else:
                 action = act_old
                 act_counter += 1
+
+            # 2. Encoding Azione a_t
+            if not args.multibinary:
+                global_idx = DoomMap.reindex_categorical(local_buttons_name[action], DoomNames.buttons_names)
+                act_one_hot = DoomMap.one_hot(global_idx, n_classes=len(DoomNames.buttons_names))
+            else:
+                act_one_hot = action
+
+            act = OrderedDict()
+            for n, v in zip(DoomNames.buttons_names, act_one_hot):
+                act[n] = v
             
+            # 3. Encoding Attributi att_t
+            att = OrderedDict.fromkeys(DoomNames.att_player_names, 0)
+            for a, n in zip(game_info, local_stat_name):
+                att[n] = a
 
-
-            # ---------- step ----------
+            # 4. Step nell'ambiente (t -> t+1)
             game_next, reward, terminated, truncated, info = env.step(action)
-            done = terminated or truncated
-
             s_next = game_next["screen"]
             game_info_next = game_next["gamevariables"]
+            done = terminated or truncated
 
-            # ---------- store transition ----------
+            # 5. Store della transizione (Sincronizzata)
+            # Salviamo: s_t, a_t, att_t, r_t+1, done_t+1
+            if args.crop:
+                s = s[100:, 54:267]
+                
+            s = cv.resize(s, (args.resolution_w, args.resolution_h), interpolation=cv.INTER_NEAREST)
             transition = {
-                "obs": cv.resize(s, (args.resolution_w,args.resolution_h)),
+                "obs": s,
                 "ids": ids,
-                "reward": reward,
-                "done": done,
+                "reward": float(reward),
+                "done": bool(done),
             }
+            buffer.append(transition | dict(act) | dict(att))
 
-            #buffer.append(transition | {"action": np.array(list(gamepad.to_dict().values())), "att_player":np.array(list(player.values()))})
-            buffer.append( transition | act | att )
-
-            # ---------- avanza ----------
+            # 6. Avanzamento
             s = s_next
             game_info = game_info_next
             ids += 1
-            #gamepad.reset()
-                    
-        
+
+ 
         if bucket_capacity <= 0:
             current_bucket = Path(base_path.joinpath(f"{len(buckets)}"))
             os.mkdir(current_bucket)

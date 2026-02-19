@@ -23,6 +23,7 @@ dependencies: # conda dependences
     - tqdm
     - opencv-python
     - timm
+    - rich
 
 
     

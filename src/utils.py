@@ -12,7 +12,7 @@ def create_video_from_frames(input_folder, output_path, fps=30):
         fps (int): Frame per secondo.
     """
     images = sorted([Path(img) for img in os.listdir(input_folder) if img.endswith((".png", ".jpg", ".jpeg"))])
-    images.sort(key=lambda x: x.name)
+    images.sort(key=lambda f: int(Path(f).stem))
     if not images:
         print("Nessuna immagine trovata nella cartella.")
         return
