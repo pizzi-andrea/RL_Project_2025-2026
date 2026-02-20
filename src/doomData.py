@@ -1,3 +1,4 @@
+import cv2 as cv
 import os
 import numpy as np
 import torch
@@ -13,7 +14,6 @@ from torchvision.transforms.v2 import Compose, Resize, ToImage, ToDtype
 from torchvision.io import decode_image
 from torchvision.utils import save_image
 from tqdm import tqdm
-import cv2 as cv
 from priority_functions import PriorityExperienceReplay
 
 class DoomDataset (Dataset):
@@ -40,7 +40,7 @@ class DoomDataset (Dataset):
 
 class EpisodicDoomDataset(Dataset):
     def __init__(self, 
-                 episods:list[str], 
+                 episodes:list[str], 
                  per_indexs:list, 
                  obs_size:tuple[int,int], 
                  action_name:tuple[str], 
@@ -55,7 +55,7 @@ class EpisodicDoomDataset(Dataset):
         self.preprocessor = preprocessor
         self.per_indexs = per_indexs
         self.csv_name = csv_name
-        self.episods = episods
+        self.episodes = episodes
         self.chunk_size = chunk_size # Lunghezza della finestra per il training
         self.action_name = [*action_name]
         self.att_name = [*att_name]
@@ -65,10 +65,10 @@ class EpisodicDoomDataset(Dataset):
         
 
     def __len__(self):
-        return len(self.episods)
+        return len(self.episodes)
     
     def __getitem__(self, index):
-        episode_path_m = Path(self.episods[index]).joinpath(self.csv_name)
+        episode_path_m = Path(self.episodes[index]).joinpath(self.csv_name)
         # get length of episode
         total_frames = len(pd.read_csv(episode_path_m, usecols=[0]))
         
@@ -171,7 +171,7 @@ def collate_fn(batch):
         "is_first": batch_is_first
     }
 
-def collect_episods_from_buffer(buffer:PriorityExperienceReplay, max_dim:int=5000):
+def collect_episodes_from_buffer(buffer:PriorityExperienceReplay, max_dim:int=5000):
     buff_path, pririty_idx, buffer_idx, weights  = buffer.get(max_dim)
     return buff_path, pririty_idx, buffer_idx, weights 
 

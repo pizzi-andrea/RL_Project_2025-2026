@@ -97,7 +97,7 @@ class DreamerXP_Trainer(Trainer):
         
         
     @no_grad
-    def simulate(self, episods:int, buffer:AdversarialReplayPriority, env_id:str):
+    def simulate(self, episodes:int, buffer:AdversarialReplayPriority, env_id:str):
         
         env = gymnasium.make(env_id, max_episode_steps=self.max_length, render_mode="rgb_array")
         mapper = ButtonActionMapper.from_env(env)
@@ -110,7 +110,7 @@ class DreamerXP_Trainer(Trainer):
             _player[s] = None
         ids = len(buffer)
         self.agent.eval()
-        for e in range(1, episods+1):
+        for e in range(1, episodes+1):
             
             game, _ = env.reset()
             s = game["screen"]

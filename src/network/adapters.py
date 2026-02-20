@@ -16,15 +16,15 @@ class PERAdapter(L.Callback):
     
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         
-        index = outputs["episods_idx"]
-        loss = outputs["episods_loss"]
+        index = outputs["episodes_idx"]
+        loss = outputs["episodes_loss"]
         
-        update_episods, new_priority, count_sample = self.buffer_train.update(priority_idx=index, losses=loss)
+        update_episodes, new_priority, count_sample = self.buffer_train.update(priority_idx=index, losses=loss)
         
         if batch_idx == 0:     
             trainer.print("new priority...")
             trainer.print(f"[PER Callback]:")
-            trainer.print(f"Sample episods (last): {update_episods}")
+            trainer.print(f"Sample episodes (last): {update_episodes}")
             trainer.print(f"Sample Priorities (last): {new_priority}")
             trainer.print(f"Sample Counts (last): {count_sample}")
        

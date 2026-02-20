@@ -32,15 +32,14 @@ class StepLimitCallback(Callback):
     def __init__(self, steps_per_round):
         super().__init__()
         self.steps_per_round = steps_per_round
-        self.target_step = 0
+        self.target_batch = 0
 
     def on_train_start(self, trainer, pl_module):
-        self.target_step = trainer.global_step + self.steps_per_round
-       
+        self.batch_count = 0
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-
-        if trainer.global_step >= self.target_step:
+        self.batch_count += 1
+        if self.batch_count >= self.steps_per_round:
             trainer.should_stop = True
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pygame.pkgdata")
@@ -222,11 +221,11 @@ def main():
         agent_model = DreamerAgent.load_from_checkpoint(config["global_config"]["policy_w"], 
                     dreamer_model       =   rssm_model, 
                     action_space_dim    =   config["global_config"]["action_shape"],
-                    horizont            =   config["policy_config"]["horizont"],
+                    horizon             =   config["policy_config"]["horizon"],
                     burn_in             =   config["policy_config"]["burn_in"],
                     lr                  =   config["policy_config"]["lr"],
                     entropy_coef        =   config["policy_config"]["actor_entropy"],
-                    buckets              =   config["policy_config"]["buckets"],
+                    buckets             =   config["policy_config"]["buckets"],
                     hidden_dim          =   config["policy_config"]["hidden_dim"],
                     unimix              =   config["policy_config"]["unimix"],
                     ema_decay           =   config["policy_config"]["ema_decay"],
@@ -240,7 +239,7 @@ def main():
         agent_model = DreamerAgent(
                     dreamer_model       =   rssm_model, 
                     action_space_dim    =   config["global_config"]["action_shape"],
-                    horizont            =   config["policy_config"]["horizont"],
+                    horizon             =   config["policy_config"]["horizon"],
                     burn_in             =   config["policy_config"]["burn_in"],
                     lr                  =   config["policy_config"]["lr"],
                     entropy_coef        =   config["policy_config"]["actor_entropy"],

@@ -22,7 +22,7 @@ from globals import DoomMap, DoomNames
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run rolling procedure')
     parser.add_argument("-d", "--dataset", required=False, default="Vizdoom", type=str)
-    parser.add_argument('-n', '--episods', required=True, default=10, type=int)
+    parser.add_argument('-n', '--episodes', required=True, default=10, type=int)
     parser.add_argument('-s', '--split', required=True, choices=["train", "test", "validation"])
     parser.add_argument('-e', '--env', required=False, default="VizdoomBasic-v0", type=str)
     parser.add_argument('-t', '--horizont', required=False, default=500, type=int)
@@ -105,7 +105,7 @@ if __name__ == "__main__":
     print("Local attribute dected", local_stat_name)
     print("buttons mask dected:", act_mask)
     
-    for episode in tqdm(range(init_episode, init_episode + args.episods)):
+    for episode in tqdm(range(init_episode, init_episode + args.episodes)):
         ids = 0
         game, _ = env.reset()
         s = game["screen"]
