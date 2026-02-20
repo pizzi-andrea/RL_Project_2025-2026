@@ -432,7 +432,7 @@ class CuriosityReplayPriority(PriorityExperienceReplay):
         max_cnt = self.count_buffer[max_idx]
 
         print(f"[Curiosity Replay] Alpha: {self.alpha:.2f}, Beta: {self.beta:.2f}, PMAX: {self.PMAX:.2f}")
-        print(f"Sample episods (last): {self.last_updates}")
+        print(f"Sample episodes (last): {self.last_updates}")
         print(f"Sample Priorities (last): {self.buffer.priority[tree_idxs]}")
         print(f"Sample Counts (last): {self.count_buffer[tree_idxs]}")
         print(f"Max Priority: {max_val:.2f} (idx {max_idx}, count {max_cnt})")

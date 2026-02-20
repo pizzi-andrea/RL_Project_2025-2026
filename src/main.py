@@ -32,7 +32,7 @@ class StepLimitCallback(Callback):
     def __init__(self, steps_per_round):
         super().__init__()
         self.steps_per_round = steps_per_round
-        self.target_batch = 0
+        self.batch_count = 0
 
     def on_train_start(self, trainer, pl_module):
         self.batch_count = 0
@@ -129,7 +129,6 @@ def main():
         logger=TensorBoardLogger(log_experiment, name="RSSM"),
         callbacks=[PERAdapter(PER4train), StepLimitCallback(config["rssm_config"]["train_steps"]), RichProgressBar(leave=True)],
         max_epochs=-1,
-        limit_val_batches=config["rssm_config"]["batch_acc"],
         log_every_n_steps=1,
         accumulate_grad_batches=config["rssm_config"]["batch_acc"],
         precision=config["global_config"]["precision"]

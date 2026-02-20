@@ -18,7 +18,7 @@ class DynamicDataAllocator:
         self.episode_for_subdir = episode_for_subdir
         
         self.iter_paths = deque()
-        self.episods_indexs = deque()
+        self.episodes_indexs = deque()
         
         self.idx = 0
         self.prefix = prefix
@@ -32,17 +32,17 @@ class DynamicDataAllocator:
         
         """
         
-        if self.idx > 0 and self.episods_indexs[-1] < self.episode_for_subdir:
-            episode_subdir_idx = self.episods_indexs[-1]
+        if self.idx > 0 and self.episodes_indexs[-1] < self.episode_for_subdir:
+            episode_subdir_idx = self.episodes_indexs[-1]
             base_path = self.iter_paths[-1]
-            self.episods_indexs[-1] += 1
+            self.episodes_indexs[-1] += 1
         else:
             episode_subdir_idx = 0
             new_path = self.log_dir.joinpath(f"{self.prefix}_{self.idx}")
             new_path.mkdir(parents=True, exist_ok=True)
             
             self.iter_paths.append(new_path)
-            self.episods_indexs.append(1)
+            self.episodes_indexs.append(1)
             base_path = new_path
             self.idx += 1
 
