@@ -75,8 +75,8 @@ rssm_config:
   buckets: 255
   unimix: 0.01
   beta_dyn: 1.0
-  beta_pred: 1.0
-  beta_rep: 0.1
+  beta_pred: 0.1
+  beta_rep: 1.0
   lr: 0.0008
 
 
