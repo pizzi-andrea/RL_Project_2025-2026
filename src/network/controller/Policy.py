@@ -53,7 +53,7 @@ class DreamerAgent(L.LightningModule):
         
         
         # -- Define Actor-critic Structure
-        self.actor = Actor(dim_state=self.emb_dim, num_dist=action_space_dim, unimix=unimix, hidden_dim=1024)
+        self.actor = Actor(dim_state=self.emb_dim, num_dist=action_space_dim, unimix=unimix, hidden_dim=hidden_dim)
         self.critic = Critic(dim_state=self.emb_dim, num_buckets=bukets, min_buckets=min_buckets, max_buckets=max_buckets, hidden_dim=hidden_dim)
 
     def setup(self, stage):
@@ -71,7 +71,7 @@ class DreamerAgent(L.LightningModule):
     #    return probs + (sample - probs).detach()
     
     def configure_gradient_clipping(self, optimizer, gradient_clip_val = None, gradient_clip_algorithm = None):
-        AGC(self.parameters(), clip_factor=0.03)
+        AGC(self.parameters(), clip_factor=0.3)
 
     
     def configure_optimizers(self):

@@ -92,8 +92,8 @@ class Dreamer(L.LightningModule):
 
         self.att_encoder = nn.Sequential(
             nn.Linear(att_dim, out_features=internal_hidden_dim),
-            #nn.RMSNorm(internal_hidden_dim),
-            #nn.SiLU()
+            nn.RMSNorm(internal_hidden_dim),
+            nn.SiLU()
         )
 
         self.encoder_proj = nn.Sequential(
@@ -104,8 +104,8 @@ class Dreamer(L.LightningModule):
 
         self.feat_proj = nn.Sequential(
             nn.Linear(rssm_feat_dim, internal_hidden_dim),
-            #nn.RMSNorm(internal_hidden_dim),
-            #nn.SiLU()
+            nn.RMSNorm(internal_hidden_dim),
+            nn.SiLU()
         )
 
 
@@ -131,9 +131,11 @@ class Dreamer(L.LightningModule):
         # continue predictor
         self.cont_head = nn.Sequential(
             nn.Linear(internal_hidden_dim, internal_hidden_dim*2),
+            nn.RMSNorm(internal_hidden_dim*2),
             nn.SiLU(),
 
             nn.Linear(internal_hidden_dim*2, internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim),
             nn.SiLU(),
 
             nn.Linear(internal_hidden_dim, 1),
@@ -300,7 +302,7 @@ class Dreamer(L.LightningModule):
     
     
     def configure_gradient_clipping(self, optimizer, gradient_clip_val = None, gradient_clip_algorithm = None):
-        AGC(self.parameters(), clip_factor=0.03)
+        AGC(self.parameters(), clip_factor=0.3)
         
     
         

@@ -15,6 +15,7 @@ class EMAScalar(nn.Module):
         self.register_buffer("scale", torch.tensor(1.0))
 
     def forward(self, values):
+        values = values.detach()
         if not self.training:
             return self.scale
         
@@ -133,7 +134,7 @@ def AGC(parameters, clip_factor=0.01, eps=1e-3):
         trigger = g_norm > max_norm
         
         scaled_g = g_data * (max_norm / g_norm.clamp(min=1e-6))
-        p.grad.data.copy_(torch.where(trigger, scaled_g, g_data))
+        p.grad.copy_(torch.where(trigger, scaled_g, g_data))
 
 
 def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, continues, entropy_scale=3e-4):

@@ -26,8 +26,7 @@ class Critic(nn.Module):
         self.softmax = nn.Softmax(-1)
 
         self.buckets_proj.weight.data.fill_(0.0)
-        self.buckets_proj.bias.data.fill_(0.0)
-  
+        self.buckets_proj.bias.data.fill_(0.0)  
 
     def forward(self, x):
         x = self.l1(x)

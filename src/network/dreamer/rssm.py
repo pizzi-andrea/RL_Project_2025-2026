@@ -35,7 +35,7 @@ class RSSM(nn.Module): # need specific train loop
         stoch_latents: int = 32,   # L (number of discrete latent variables)
         stoch_classes: int = 32,   # K (number of classes per latent variable)
         embed_dim: int = 1024,
-       
+        num_gru_blocks: int = 8,
         unimix: float = 0.01,
     ):
         """
@@ -55,7 +55,7 @@ class RSSM(nn.Module): # need specific train loop
         :type unimix: float
         """
         super().__init__()
-        
+        self.num_gru_blocks = num_gru_blocks
         self.action_dim = action_dim
         self.deter_dim = deter_dim
         self.L = stoch_latents
@@ -66,10 +66,12 @@ class RSSM(nn.Module): # need specific train loop
 
         self.action_embed = nn.Sequential(
             nn.Linear(action_dim, embed_dim),
+            nn.RMSNorm(embed_dim),
             nn.SiLU()
         )
         self.z_embed = nn.Sequential(
             nn.Linear(self.output_dimension, embed_dim),
+            nn.RMSNorm(embed_dim),
             nn.SiLU()
         )
 
@@ -79,8 +81,18 @@ class RSSM(nn.Module): # need specific train loop
             nn.SiLU()
         )"""
 
-        self.gru = nn.GRUCell(input_size=2*embed_dim, hidden_size=deter_dim) #Batch, seq, feature
+        #self.gru = nn.GRUCell(input_size=2*embed_dim, hidden_size=deter_dim) #Batch, seq, feature
 
+        self.h_proj = nn.Sequential(
+            nn.Linear(deter_dim, embed_dim),
+            nn.RMSNorm(embed_dim),
+            nn.SiLU()
+        )
+        self.block_size = deter_dim // self.num_gru_blocks
+        gru_input_size = 3 * embed_dim
+        self.gru = nn.ModuleList(
+            [nn.GRUCell(input_size=gru_input_size, hidden_size=self.block_size) for _ in range(self.num_gru_blocks)]
+        )
         # prior logits memory 
         self.prior_net = nn.Sequential(
             nn.Linear(deter_dim, embed_dim), 
@@ -105,8 +117,23 @@ class RSSM(nn.Module): # need specific train loop
         return RSSMState(h=h, z=z, z_logits=z_logits)
 
     
-    def _gru_step(self, prev_h: torch.Tensor, inp_bt: torch.Tensor) -> torch.Tensor:
-        return self.gru(inp_bt, prev_h)
+    def _gru_step(self, prev_h: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        
+        h_proj_feat = self.h_proj(prev_h)
+
+        gru_input = torch.cat([z, h_proj_feat], dim=-1)
+
+        # split grup inputs in sublocks
+
+        gru_input_blocks = torch.split(prev_h, self.block_size, dim=-1)
+        h_next = []
+
+        for i, cell in enumerate(self.gru):
+            h_next.append( cell(gru_input, gru_input_blocks[i]) )
+
+        output_embeds = torch.cat(h_next, dim=-1)
+
+        return output_embeds
     
     
     def imagine_step(self, state: RSSMState, action: torch.Tensor, mask_t: Optional[torch.Tensor]= None) -> Tuple[RSSMState, torch.Tensor]:
