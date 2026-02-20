@@ -1,3 +1,6 @@
+import numpy as np
+import cv2 as cv
+
 import argparse
 import os
 from pathlib import Path
@@ -223,7 +226,7 @@ def main():
                     burn_in             =   config["policy_config"]["burn_in"],
                     lr                  =   config["policy_config"]["lr"],
                     entropy_coef        =   config["policy_config"]["actor_entropy"],
-                    bukets              =   config["policy_config"]["buckets"],
+                    buckets              =   config["policy_config"]["buckets"],
                     hidden_dim          =   config["policy_config"]["hidden_dim"],
                     unimix              =   config["policy_config"]["unimix"],
                     ema_decay           =   config["policy_config"]["ema_decay"],
@@ -241,7 +244,7 @@ def main():
                     burn_in             =   config["policy_config"]["burn_in"],
                     lr                  =   config["policy_config"]["lr"],
                     entropy_coef        =   config["policy_config"]["actor_entropy"],
-                    bukets              =   config["policy_config"]["buckets"],
+                    buckets             =   config["policy_config"]["buckets"],
                     hidden_dim          =   config["policy_config"]["hidden_dim"],
                     unimix              =   config["policy_config"]["unimix"],
                     ema_decay           =   config["policy_config"]["ema_decay"],
@@ -258,15 +261,15 @@ def main():
         DynamicDataAllocator(config["PER_config"]["cache"], 
         PER4train), device=device
     )
-    print(f"Total steps for DREAMER: {config["rssm_config"]["sample_episods"]/config["rssm_config"]["train_batch"]}")
-    print(f"Total steps for Policy: {config["policy_config"]["sample_episods"]/config["policy_config"]["train_batch"]}")
+    print(f"Total steps for DREAMER: {config['rssm_config']['sample_episodes']/config['rssm_config']['train_batch']}")
+    print(f"Total steps for Policy: {config['policy_config']['sample_episodes']/config['policy_config']['train_batch']}")
     for epoch in range(1, config["global_config"]["dreamer_iterations"] + 1):
-        print(f"Start epoch iteration {epoch}/{config["global_config"]["dreamer_iterations"]}")
-        sampled_episods, priority_idxs, _, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), config["rssm_config"]["sample_episods"]))
+        print(f"Start epoch iteration {epoch}/{config['global_config']['dreamer_iterations']}")
+        sampled_episodes, priority_idxs, _, weights = collect_episodes_from_buffer(PER4train, min(len(PER4train), config["rssm_config"]["sample_episodes"]))
         PER4train.info()
         
         rssm_train_loader = DataLoader(EpisodicDoomDataset(
-                episods=sampled_episods,
+                episodes=sampled_episodes,
                 per_indexs=priority_idxs,
                 obs_size=(config["global_config"]["img_size_h"], config["global_config"]["img_size_l"]),
                 att_name=DoomNames.att_player_names,
@@ -285,10 +288,10 @@ def main():
 
         rssm_trainer.fit(rssm_model, train_dataloaders=rssm_train_loader)
         
-        sampled_episods, priority_idxs, _, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), config["policy_config"]["sample_episods"]))
+        sampled_episodes, priority_idxs, _, weights = collect_episodes_from_buffer(PER4train, min(len(PER4train), config["policy_config"]["sample_episodes"]))
         PER4train.info()
         policy_train_loader = DataLoader(EpisodicDoomDataset(
-                episods=sampled_episods,
+                episodes=sampled_episodes,
                 per_indexs=priority_idxs,
                 obs_size=(config["global_config"]["img_size_h"], config["global_config"]["img_size_l"]),
                 att_name=DoomNames.att_player_names,
@@ -307,9 +310,9 @@ def main():
         policy_trainer.fit(agent_model, train_dataloaders=policy_train_loader)
         
         if (epoch > config["global_config"]["warmup"]):
-            for env, n in zip(config["global_config"]["envs"], config["global_config"]["envs_episods"]):
-                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=2, max_length=config["global_config"]["max_episode_length"], preprocess=simple_preprocessor_float32, post_process=simple_post_processor)
-                print(f"mean reword collected by policy {reword} in env {env}")
+            for env, n in zip(config["global_config"]["envs"], config["global_config"]["envs_episodes"]):
+                reward, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=2, max_length=config["global_config"]["max_episode_length"], preprocess=simple_preprocessor_float32, post_process=simple_post_processor)
+                print(f"mean reward collected by policy {reward} in env {env}")
                 create_video_from_frames(best_path.joinpath("obs"), validation_log.joinpath(f"{env}_{epoch}.mp4"), 15)
                 
         
