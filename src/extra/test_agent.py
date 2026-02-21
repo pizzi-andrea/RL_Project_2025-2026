@@ -26,7 +26,7 @@ print("WM encoder =", type(wm.encoder))   # oppure Dreamer.load_from_checkpoint(
 print("WM encoder =", type(wm.encoder)) # per vedere se sta caricando il vae o il convencoder
 
 # 3) creo agente
-agent = DreamerAgent(wm, action_space_dim=16, horizont=15, burn_in=10)
+agent = DreamerAgent(wm, action_space_dim=16, horizon=15, burn_in=10)
 
 # 4) train corto (1-3 batch)
 trainer = L.Trainer(

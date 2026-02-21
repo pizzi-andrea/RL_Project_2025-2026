@@ -5,8 +5,8 @@ from collections import OrderedDict
 @dataclass(frozen=True)
 class DoomNames:
     """Global player attribute names for standard VizDoom enviroment"""
-    att_player_names: tuple[str] = ('AMMO0', 'AMMO2','AMMOSELECTED_WEAPON', 'ARMOR', 'HEALTH', 'KILLCOUNT', 'SELECTED_WEAPON_AMMO')
-    buttons_names: tuple[str]     =    ('NO-OPP', 'ATTACK', 'CROUCH', 'JUMP', 'MOVE_BACKWARD', 'MOVE_FORWARD', 'MOVE_LEFT', 'MOVE_RIGHT', 'RELOAD', 'SELECT_NEXT_WEAPON', 'SELECT_PREV_WEAPON', 'SPEED', 'STRAFE', 'TURN_LEFT', 'TURN_RIGHT', 'USE', 'ZOOM', "SELECT_WEAPON1", "SELECT_WEAPON2", "SELECT_WEAPON3", "SELECT_WEAPON4", "SELECT_WEAPON5", "SELECT_WEAPON6", "SELECT_WEAPON7",)
+    att_player_names: tuple[str]  = ('AMMO0', 'AMMO2','AMMOSELECTED_WEAPON', 'ARMOR', 'HEALTH', 'KILLCOUNT', 'SELECTED_WEAPON_AMMO')
+    buttons_names: tuple[str]     =    ('NO-OPP', 'ATTACK', 'CROUCH', 'JUMP', 'MOVE_BACKWARD', 'MOVE_FORWARD', 'MOVE_LEFT', 'MOVE_RIGHT', 'RELOAD', 'SELECT_NEXT_WEAPON', 'SELECT_PREV_WEAPON', 'SPEED', 'STRAFE', 'TURN_LEFT', 'TURN_RIGHT', 'USE', 'ZOOM', "SELECT_WEAPON1", "SELECT_WEAPON2", "SELECT_WEAPON3", "SELECT_WEAPON4", "SELECT_WEAPON5", "SELECT_WEAPON6", "SELECT_WEAPON7")
 
 @dataclass(frozen=True)
 class DoomMap:

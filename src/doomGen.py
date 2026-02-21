@@ -25,7 +25,7 @@ if __name__ == "__main__":
     parser.add_argument('-n', '--episodes', required=True, default=10, type=int)
     parser.add_argument('-s', '--split', required=True, choices=["train", "test", "validation"])
     parser.add_argument('-e', '--env', required=False, default="VizdoomBasic-v0", type=str)
-    parser.add_argument('-t', '--horizont', required=False, default=500, type=int)
+    parser.add_argument('-t', '--horizon', required=False, default=500, type=int)
     parser.add_argument("--skip_frame", required=False, default=1, type=int)
     parser.add_argument("--sticky" ,required=False, action="store_true")
     parser.add_argument("--resolution_h", required=False, default=120, type=int)
@@ -42,7 +42,7 @@ if __name__ == "__main__":
     render_mode="rgb_array",
     frame_skip=args.skip_frame,
     max_buttons_pressed=1,
-    max_episode_steps=args.horizont
+    max_episode_steps=args.horizon
     )
 
     if args.sticky:

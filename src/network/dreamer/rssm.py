@@ -163,7 +163,7 @@ class RSSM(nn.Module): # need specific train loop
             
             m3 = mask.float().view(-1, 1, 1)
             
-            z_logits = m3 * post_logits + (1 - m3) * prev.z_logits 
+            z_logits = m3 * post_logits 
             
             #
             state = RSSMState(h=h, z=z, z_logits=z_logits)

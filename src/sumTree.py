@@ -6,7 +6,7 @@ class SumTree:
     def __init__(self, size:int) -> None:
         self.size = size
         
-        self.priority = np.zeros((2*size)-1, dtype=np.float32)
+        self.priority = np.zeros((2*size)-1, dtype=np.float64)
         self.buffer = np.ndarray(shape=size, dtype=np.object_)
         self.buffer.fill(None)
         self.buffer_idx = 0
