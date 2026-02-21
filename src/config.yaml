@@ -1,9 +1,7 @@
 PER_config:
   buffer_size: 100000 # 100.000 almeno
   cache: ".per/"
-  
-  
-  
+
 global_config:
   multi_cpu: 24
   max_episode_length: 300
@@ -11,7 +9,7 @@ global_config:
   Project_logs: "Project"
   action_shape: 17
   att_shape: 7
-  
+
   img_channels: 3
   img_size_h : 64
   img_size_l : 64
@@ -23,19 +21,18 @@ global_config:
   precision: "32-true" # Double precision (64, '64' or '64-true'), full precision (32, '32' or '32-true'), 16bit mixed precision (16, '16', '16-mixed') bfloat16('bf16', 'bf16-mixed'). Default: '32-true'.
 
   envs:
-
     #- "VizdoomDeadlyCorridor-v1"
     #- "VizdoomBasicNotifications-v1"
     # - "VizdoomHealthGathering-v1"
     #- "VizdoomDefendLine-v1"
     - "VizdoomBasic-v1"
 
-  envs_episods:
+  envs_episodes:
     #- 500
     #- 100
     - 50
     #- 100
-   
+
 vae_config:
   latent_dim: 1024
   model_dim: 1024
@@ -45,12 +42,11 @@ vae_config:
   # train_batch: 64
 
 curiosity_config:
-  alpha: 0.8  
-  beta: 0.1   
+  alpha: 0.8
+  beta: 0.1
   eps: 0.003
-  p_max: 10   
-  c: 0.01     
-
+  p_max: 10
+  c: 0.01
 
 rssm_config:
   sample_episods: 100
@@ -79,7 +75,6 @@ rssm_config:
   beta_rep: 0.1
   lr: 0.00008
 
-
 policy_config:
   sample_episods: 100
   train_steps: 150
@@ -96,5 +91,3 @@ policy_config:
   ema_epsilon: 1.0
   min_buckets: -20
   max_buckets: 20
-
-

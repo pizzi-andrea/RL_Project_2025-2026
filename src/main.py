@@ -1,3 +1,6 @@
+import numpy as np
+import cv2 as cv
+
 import argparse
 import os
 from pathlib import Path
@@ -29,15 +32,14 @@ class StepLimitCallback(Callback):
     def __init__(self, steps_per_round):
         super().__init__()
         self.steps_per_round = steps_per_round
-        self.target_step = 0
+        self.batch_count = 0
 
     def on_train_start(self, trainer, pl_module):
-        self.target_step = trainer.global_step + self.steps_per_round
-       
+        self.batch_count = 0
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-
-        if trainer.global_step >= self.target_step:
+        self.batch_count += 1
+        if self.batch_count >= self.steps_per_round:
             trainer.should_stop = True
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pygame.pkgdata")
@@ -127,7 +129,6 @@ def main():
         logger=TensorBoardLogger(log_experiment, name="RSSM"),
         callbacks=[PERAdapter(PER4train), StepLimitCallback(config["rssm_config"]["train_steps"]), RichProgressBar(leave=True)],
         max_epochs=-1,
-        limit_val_batches=config["rssm_config"]["batch_acc"],
         log_every_n_steps=1,
         accumulate_grad_batches=config["rssm_config"]["batch_acc"],
         precision=config["global_config"]["precision"]
@@ -221,11 +222,11 @@ def main():
         agent_model = DreamerAgent.load_from_checkpoint(config["global_config"]["policy_w"], 
                     dreamer_model       =   rssm_model, 
                     action_space_dim    =   config["global_config"]["action_shape"],
-                    horizont            =   config["policy_config"]["horizont"],
+                    horizon             =   config["policy_config"]["horizon"],
                     burn_in             =   config["policy_config"]["burn_in"],
                     lr                  =   config["policy_config"]["lr"],
                     entropy_coef        =   config["policy_config"]["actor_entropy"],
-                    bukets              =   config["policy_config"]["buckets"],
+                    buckets             =   config["policy_config"]["buckets"],
                     hidden_dim          =   config["policy_config"]["hidden_dim"],
                     unimix              =   config["policy_config"]["unimix"],
                     ema_decay           =   config["policy_config"]["ema_decay"],
@@ -239,11 +240,11 @@ def main():
         agent_model = DreamerAgent(
                     dreamer_model       =   rssm_model, 
                     action_space_dim    =   config["global_config"]["action_shape"],
-                    horizont            =   config["policy_config"]["horizont"],
+                    horizon             =   config["policy_config"]["horizon"],
                     burn_in             =   config["policy_config"]["burn_in"],
                     lr                  =   config["policy_config"]["lr"],
                     entropy_coef        =   config["policy_config"]["actor_entropy"],
-                    bukets              =   config["policy_config"]["buckets"],
+                    buckets             =   config["policy_config"]["buckets"],
                     hidden_dim          =   config["policy_config"]["hidden_dim"],
                     unimix              =   config["policy_config"]["unimix"],
                     ema_decay           =   config["policy_config"]["ema_decay"],
@@ -260,15 +261,15 @@ def main():
         DynamicDataAllocator(config["PER_config"]["cache"], 
         PER4train), device=device
     )
-    print(f"Total steps for DREAMER: {config["rssm_config"]["sample_episods"]/config["rssm_config"]["train_batch"]}")
-    print(f"Total steps for Policy: {config["policy_config"]["sample_episods"]/config["policy_config"]["train_batch"]}")
+    print(f"Total steps for DREAMER: {config['rssm_config']['sample_episodes']/config['rssm_config']['train_batch']}")
+    print(f"Total steps for Policy: {config['policy_config']['sample_episodes']/config['policy_config']['train_batch']}")
     for epoch in range(1, config["global_config"]["dreamer_iterations"] + 1):
-        print(f"Start epoch iteration {epoch}/{config["global_config"]["dreamer_iterations"]}")
-        sampled_episods, priority_idxs, _, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), config["rssm_config"]["sample_episods"]))
+        print(f"Start epoch iteration {epoch}/{config['global_config']['dreamer_iterations']}")
+        sampled_episodes, priority_idxs, _, weights = collect_episodes_from_buffer(PER4train, min(len(PER4train), config["rssm_config"]["sample_episodes"]))
         PER4train.info()
         
         rssm_train_loader = DataLoader(EpisodicDoomDataset(
-                episods=sampled_episods,
+                episodes=sampled_episodes,
                 per_indexs=priority_idxs,
                 obs_size=(config["global_config"]["img_size_h"], config["global_config"]["img_size_l"]),
                 att_name=DoomNames.att_player_names,
@@ -287,10 +288,10 @@ def main():
 
         rssm_trainer.fit(rssm_model, train_dataloaders=rssm_train_loader)
         
-        sampled_episods, priority_idxs, _, weights = collect_episods_from_buffer(PER4train, min(len(PER4train), config["policy_config"]["sample_episods"]))
+        sampled_episodes, priority_idxs, _, weights = collect_episodes_from_buffer(PER4train, min(len(PER4train), config["policy_config"]["sample_episodes"]))
         PER4train.info()
         policy_train_loader = DataLoader(EpisodicDoomDataset(
-                episods=sampled_episods,
+                episodes=sampled_episodes,
                 per_indexs=priority_idxs,
                 obs_size=(config["global_config"]["img_size_h"], config["global_config"]["img_size_l"]),
                 att_name=DoomNames.att_player_names,

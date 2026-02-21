@@ -290,14 +290,14 @@ class Dreamer(L.LightningModule):
         """Predict attribute of differentiable world"""
         return self.att_head(feat)
 
-    def _get_loss_for_batch(self, episods_idx, loss_episods):
-        """get loss for batch and index episods in batch"""
-        idx_episods = episods_idx.detach().cpu().numpy()
-        loss_episods = loss_episods.detach().cpu().numpy()
+    def _get_loss_for_batch(self, episodes_idx, loss_episodes):
+        """get loss for batch and index episodes in batch"""
+        idx_episodes = episodes_idx.detach().cpu().numpy()
+        loss_episodes = loss_episodes.detach().cpu().numpy()
         
         return {
-            "episods_idx":idx_episods, 
-            "episods_loss":loss_episods
+            "episodes_idx":idx_episodes, 
+            "episodes_loss":loss_episodes
         }
     
     
@@ -378,8 +378,8 @@ class Dreamer(L.LightningModule):
         # ouput train step
         return {
             "loss": loss,
-            "episods_idx": priority_idx,
-            "episods_loss": loss_batch.detach().cpu().numpy(),
+            "episodes_idx": priority_idx,
+            "episodes_loss": loss_batch.detach().cpu().numpy(),
             "x_hat": out["x_hat"][0].detach().cpu(),
             "x": batch["obs"][0].detach().cpu()
         }

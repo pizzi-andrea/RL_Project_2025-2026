@@ -1,0 +1,26 @@
+# Core
+numpy
+pandas
+pandas[performance]
+tqdm
+pyyaml
+
+# Plot / logging
+matplotlib
+seaborn
+tensorboard
+wandb
+
+# RL / env
+gymnasium
+vizdoom
+
+# Deep learning (torch lo installo a parte, vedi sotto)
+torchvision
+torchmetrics
+lightning
+timm
+opencv-python
+
+# Utility
+gdown
