@@ -70,10 +70,7 @@ class DreamerAgent(L.LightningModule):
     #    sample = torch.bernoulli(probs)
     #    return probs + (sample - probs).detach()
     
-    def configure_gradient_clipping(self, optimizer, gradient_clip_val = None, gradient_clip_algorithm = None):
-        AGC(self.parameters(), clip_factor=0.3)
 
-    
     def configure_optimizers(self):
         # def parameters
         #   lr: 0.00003
@@ -136,18 +133,21 @@ class DreamerAgent(L.LightningModule):
         # -- critic: estimate expected values and lambda-return
         v_hat_log, v_hat = self.critic(states_hat)
         v_hat_log_b, v_hat_b = self.critic(states_buffer)
-        
-        discount = torch.cumprod(torch.cat([torch.ones_like(c_hat[:, :1]), 0.997 * c_hat[:, :-1]],dim=1),dim=1)
-        discount_buffer = torch.cumprod(torch.cat([torch.ones_like(c_buffer[:, :1]), 0.997 * c_buffer[:, :-1]],dim=1),dim=1)
-        
-          
+
         with torch.no_grad():
+            v_target_log, _ = self.critic.target_critic(states_hat)
+            v_target_log_b, v_hat_b = self.critic(states_buffer)
+        
+            discount = torch.cumprod(torch.cat([torch.ones_like(c_hat[:, :1]), 0.997 * c_hat[:, :-1]],dim=1),dim=1)
+            discount_buffer = torch.cumprod(torch.cat([torch.ones_like(c_buffer[:, :1]), 0.997 * c_buffer[:, :-1]],dim=1),dim=1)
+            
             lambda_return = lambda_returns(
-            rewards=r_hat[:, :-1],
-            values=v_hat,
-            continues=c_hat
+                rewards=r_hat[:, :-1],
+                values=v_hat,
+                continues=c_hat
             )
             v_bootstrap_replay = lambda_return[:, 0]
+            
             lambda_return_r = lambda_returns(
                 rewards=r_buffer[:, :-1],
                 values=torch.cat([v_hat_b[:, :-1], v_bootstrap_replay.unsqueeze(1)], dim=1),
@@ -164,20 +164,23 @@ class DreamerAgent(L.LightningModule):
             #print("hat_mean", r_hat.mean())
             
             #print("c_t_tot", (c_hat > 0.5).sum())
-            
+        ###################################################################################
         
         
         # -- evaluate critic respect lambda return in twohot encoding
         critic_l = critic_loss(
             v_hat_log[:, :-1], 
+            v_target_log[:, :-1],
             two_hot_lambda_return, 
             continues=discount[:, :-1]
         )
         # --  lambda return computed on real values (burn-in data)
         critic_l_reply = critic_loss(
             v_hat_log_b[:, :-1],
+            v_target_log_b[:, :-1],
             two_hot_lambda_return_b,
-            continues=discount_buffer[:, :-1]
+            continues=discount_buffer[:, :-1],
+
         )
 
         critic_loss_v = critic_l + (0.3 * critic_l_reply)
@@ -229,6 +232,7 @@ class DreamerAgent(L.LightningModule):
         }
     
     def on_train_batch_end(self, outputs, batch, batch_idx):
+        self.critic.update_target_critic()
         obs = outputs["imagination"]
         obs = self.dreamer_model.predict_obs(obs)
         obs = torch.sigmoid(obs)
@@ -313,22 +317,26 @@ class DreamerAgent(L.LightningModule):
         
         # -- for security detach gradients
         # coerent reset for imagination steps
-        rssm_state.h = rssm_state.h * (1.0 - mask_first)
-        rssm_state.z = rssm_state.z * (1.0 - mask_first)
-        
-        # stop gradients for immagination phase
-        rssm_state.z = rssm_state.z.detach()
-        rssm_state.h = rssm_state.h.detach()
-        rssm_state.z_logits = rssm_state.z_logits.detach()
+            mask_first = is_first.unsqueeze(-1).float() # Shape: [B, 1]
+            rssm_state.h = rssm_state.h * (1.0 - mask_first)
+            rssm_state.z = rssm_state.z * (1.0 - mask_first)
+            
+            mask_first_3d = mask_first.unsqueeze(-1)    # Shape: [B, 1, 1]
+            rssm_state.z_logits = rssm_state.z_logits * (1.0 - mask_first_3d)
+            
+            # stop gradients for immagination phase
+            #rssm_state.z = rssm_state.z.detach()
+            #rssm_state.h = rssm_state.h.detach()
+            #rssm_state.z_logits = rssm_state.z_logits.detach()
 
         # -- immagination using rssm
         for t in range(self.horizont):
             
             # define embedding from rssm state (detterministic + probab)
             embed = torch.cat([rssm_state.h, rssm_state.z], dim=-1)
-            embed = self.dreamer_model.feat_proj(embed)
+            embed = self.dreamer_model.feat_proj(embed).detach()
             
-            latent_states[:, t] = embed #.detach()
+            latent_states[:, t] = embed
 
             # get reward from dreamer model
             _, r_t = self.dreamer_model.predict_reward(embed)
@@ -336,8 +344,8 @@ class DreamerAgent(L.LightningModule):
             # get continue flag from model
             c_t = self.dreamer_model.predict_continue(embed)
             
-            continues[:, t] = c_t
-            reward[:, t] = r_t
+            continues[:, t] = c_t.detach()
+            reward[:, t] = r_t.detach()
             
             # use actor to predict next action
             act_t, dist_a, entropy = self.actor(embed, mask_actions)
@@ -347,9 +355,9 @@ class DreamerAgent(L.LightningModule):
             log_probs[:, t] = dist_a.log_prob(act_t)
 
             rssm_state, _ = self.rssm.imagine_step(rssm_state, act_t)
-            #rssm_state.z = rssm_state.z.detach()
-            #rssm_state.h = rssm_state.h.detach()
-            #rssm_state.z_logits = rssm_state.z_logits.detach()
+            rssm_state.z = rssm_state.z.detach()
+            rssm_state.h = rssm_state.h.detach()
+            rssm_state.z_logits = rssm_state.z_logits.detach()
         
         # -- pack values
         return {

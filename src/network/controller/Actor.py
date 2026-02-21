@@ -30,8 +30,8 @@ class Actor(nn.Module):
         torch.nn.init.orthogonal_(self.dist_pred.weight, gain=0.01) 
         self.dist_pred.bias.data.fill_(0.0)
 
-    #def reparameterize_categorical(self, logits):
-    #    return F.gumbel_softmax(logits, tau=1.0, hard=True)
+    def reparameterize_categorical(self, logits):
+        return F.gumbel_softmax(logits, tau=1.0, hard=True)
     
     #def reparameterize_bernoulli(self, probs):
     #    sample = torch.bernoulli(probs)
@@ -64,6 +64,8 @@ class Actor(nn.Module):
         # 4. Crea distribuzione
         dist = OneHotCategorical(probs=probs)
         action = dist.sample()
+
+        
         
         
         if valid_actions_mask is not None:
@@ -71,9 +73,9 @@ class Actor(nn.Module):
             entropy = -p_log_p.sum(dim=-1)
 
             # normalizzazione opzionale
-            num_valid = mask.sum(dim=-1).clamp(min=1.0)
-            max_entropy = torch.log(num_valid)
-            entropy = entropy / (max_entropy + 1e-8)
+            #num_valid = mask.sum(dim=-1).clamp(min=1.0)
+            #max_entropy = torch.log(num_valid)
+            #entropy = entropy / (max_entropy + 1e-8)
 
        
         return action, dist, entropy

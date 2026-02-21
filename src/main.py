@@ -139,7 +139,9 @@ def main():
         max_epochs=-1,
         log_every_n_steps=1,
         accumulate_grad_batches=config["policy_config"]["batch_acc"],
-        precision=config["global_config"]["precision"]
+        precision=config["global_config"]["precision"],
+        gradient_clip_val=100.0,
+        gradient_clip_algorithm="norm"
         
     )
     
@@ -304,11 +306,11 @@ def main():
             pin_memory=True,
         )
         
-        policy_trainer.fit(agent_model, train_dataloaders=policy_train_loader)
-        
         if (epoch > config["global_config"]["warmup"]):
+            policy_trainer.fit(agent_model, train_dataloaders=policy_train_loader)
+        
             for env, n in zip(config["global_config"]["envs"], config["global_config"]["envs_episods"]):
-                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=2, max_length=config["global_config"]["max_episode_length"], preprocess=simple_preprocessor_float32, post_process=simple_post_processor)
+                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=1, max_length=config["global_config"]["max_episode_length"], preprocess=simple_preprocessor_float32, post_process=simple_post_processor)
                 print(f"mean reword collected by policy {reword} in env {env}")
                 create_video_from_frames(best_path.joinpath("obs"), validation_log.joinpath(f"{env}_{epoch}.mp4"), 15)
                 

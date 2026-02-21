@@ -387,6 +387,7 @@ class Dreamer(L.LightningModule):
     def on_train_batch_end(self, outputs, batch, batch_idx):
         obs = outputs["x"]
         obs_hat = torch.sigmoid(outputs["x_hat"])
+        
 
         if batch_idx == 0:
             n = min(obs.size(0), 8)
@@ -428,25 +429,27 @@ class Dreamer(L.LightningModule):
                     # Encoding dell'osservazione
                     x_t = self.encode(obs_t, att_t)
                     
-                    # Step RSSM (aggiorna solo lo stato)
-                    mask_first = is_first.unsqueeze(-1).float()
+                   
+                    mask_first = is_first.unsqueeze(-1).float() # Shape: [B, 1]
                     state.h = state.h * (1.0 - mask_first)
                     state.z = state.z * (1.0 - mask_first)
+                    
+                   
+                    mask_first_3d = mask_first.unsqueeze(-1)    # Shape: [B, 1, 1]
+                    state.z_logits = state.z_logits * (1.0 - mask_first_3d)
                     state, _ = self.rssm.observe_step(state, a_t, x_t, m_t)
             
-            z = state.z.detach()
-            h = state.h.detach()
-            z_log = state.z_logits.detach()
+            
+                #####################################################################
+       
+                mask_first = is_first.unsqueeze(-1).float() # Shape: [B, 1]
+                state.h = state.h * (1.0 - mask_first)
+                state.z = state.z * (1.0 - mask_first)
+        
+        
+                mask_first_3d = mask_first.unsqueeze(-1)    # Shape: [B, 1, 1]
+                state.z_logits = state.z_logits * (1.0 - mask_first_3d)
 
-            state.z = z
-            state.h = h 
-            state.z_logits = z_log
-        #####################################################################
-       
-        mask_first = is_first.unsqueeze(-1).float()
-        state.h = state.h * (1.0 - mask_first)
-        state.z = state.z * (1.0 - mask_first)
-       
         # -- store temp data
         actions = train_data["action"]
         att_user = train_data["user_att"]

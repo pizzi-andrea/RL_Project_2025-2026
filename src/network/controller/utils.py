@@ -154,20 +154,25 @@ def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, c
     entropy = ((entropy_scale * entropy).detach().sum() / lengths).mean().item()
     return final_loss, ema_scale, avantage, entropy
 
-def critic_loss(v_hat, target, continues):
-    # v_hat: [B, T, Buckets], target: [B, T, Buckets], continues: [B, T]
+def critic_loss(v_hat, v_target_log, target, continues):
+    
     log_probs = torch.nn.functional.log_softmax(v_hat, dim=-1)   
-    per_step_loss = -(target * log_probs).sum(dim=-1) # Shape: [B, T]
     
-  
-    #loss_sum_T = (per_step_loss * continues).sum(dim=1) # Shape: [B]
-    lengths = continues.sum().clamp(min=1.0) # Shape: [B]
+    per_step_loss = -(target * log_probs).sum(dim=-1) + EMA_critic(v_target_log, log_probs) 
     
+    lengths = continues.sum().clamp(min=1.0)
     final_loss = (per_step_loss * continues).sum() / lengths
 
     return final_loss
 
-
+def EMA_critic(v_target_logits, log_probs):
+    reg_loss = 0.0
+    if v_target_logits is not None:
+       
+        target_probs = torch.nn.functional.softmax(v_target_logits, dim=-1).detach()
+        reg_loss = -(target_probs * log_probs).sum(dim=-1)
+    
+    return reg_loss
 @torch.no_grad()
 def twohot(x, B):
     """

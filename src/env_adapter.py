@@ -64,6 +64,9 @@ class EnviromentAdapter:
         for b in local_buttons_name: act_mask_dict[b] = 1
         act_mask = np.array([act_mask_dict[n] for n in DoomNames.buttons_names], dtype=bool)
         #######################################################################################
+
+        best_episode = -inf  
+        best_path = None    
         
         for episode in range(n_episodes):
             # single episode variables ###########
@@ -74,7 +77,7 @@ class EnviromentAdapter:
             s = game["screen"]
             game_info = game["gamevariables"]
             prev_act_t = np.zeros((len(DoomNames.buttons_names)), dtype=np.uint8) # NO-OPP
-            best_episode = -inf
+          
             total_reward = 0
             done = False
             ids = 0
@@ -133,7 +136,7 @@ class EnviromentAdapter:
             current_episode_buffer.clear() 
             episode_rewards.append(total_reward)
             
-            print(f"Episode {episode+1}/{n_episodes} finished. Reward: {total_reward}")
+            print(f"Episode {self.memory_m.episods_indexs[-1]} of {episode}/{n_episodes} finished. Reward: {total_reward}")
             
             # Aggiornamento del miglior episodio per il logging/checkpoint
             if total_reward > best_episode:
