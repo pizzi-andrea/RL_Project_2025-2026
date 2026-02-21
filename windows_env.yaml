@@ -1,0 +1,26 @@
+name: RL_PRJ
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10
+  - pip
+  - pytorch=2.2
+  - pytorch-cuda=12.1
+  - torchvision
+  - numpy
+  - pandas
+  - matplotlib
+  - seaborn
+  - torchmetrics
+  - lightning
+  - tqdm
+  - timm
+  - rich
+  - pip:
+      - vizdoom
+      - opencv-python
