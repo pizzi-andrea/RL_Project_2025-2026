@@ -97,7 +97,7 @@ class EpisodicDoomDataset(Dataset):
         obs_path = metadata["path_obs"]
         
         rewards = metadata["reward"].to_numpy(dtype=np.float16)
-        dones = metadata["done"].to_numpy(dtype=np.bool)
+        dones = metadata["done"].to_numpy(dtype=bool)
 
         obs = np.empty( (len(metadata), self.h, self.w, 3), dtype=np.uint8)
      
@@ -105,10 +105,22 @@ class EpisodicDoomDataset(Dataset):
         with np.load(episode_path_m.parent.joinpath("mask_actions.npz")) as data:
             mask_action = data["mask"]
         
-
+        obs_dir = episode_path_m.parent / "obs"
+        last_ok = None
         for idx, p in enumerate(obs_path):
-            obs[idx] = Image.open(p)
-            
+            p = Path(p)
+            if not p.is_absolute():
+                p = obs_dir / p.name 
+            if not p.exists():
+                # fallback: ripeti ultimo frame valido (episodio corto / frame mancante)
+                if last_ok is None:
+                    raise FileNotFoundError(f"Missing first frame: {p}")
+                p = last_ok
+
+            img = Image.open(p).convert("RGB")
+            obs[idx] = np.array(img, dtype=np.uint8)
+            last_ok = p
+                    
         
         # pack single observation
         sampled_episode = {
