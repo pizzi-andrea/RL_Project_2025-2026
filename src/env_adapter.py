@@ -136,7 +136,7 @@ class EnviromentAdapter:
             current_episode_buffer.clear() 
             episode_rewards.append(total_reward)
             
-            print(f"Episode {self.memory_m.episods_indexs[-1]} of {episode}/{n_episodes} finished. Reward: {total_reward}")
+            print(f"Episode {self.memory_m.episodes_indexs[-1]} of {episode}/{n_episodes} finished. Reward: {total_reward}")
             
             # Aggiornamento del miglior episodio per il logging/checkpoint
             if total_reward > best_episode:

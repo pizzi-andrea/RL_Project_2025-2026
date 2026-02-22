@@ -45,13 +45,10 @@ class Dreamer(L.LightningModule):
         
         unimix: float = 0.01,
         # --- nuove opzioni VAE --- 
-        vae: Optional[str]|VAE|None = None,
-        preprocess_callback=None
-        
-        # se vuoi che enc_x sia esattamente latent_dim del VAE, imposta enc_dim=vae_latent_dim
+        vae: Optional[str]|VAE|None = None
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=['vae', 'preprocess_callback'])
+        self.save_hyperparameters(ignore=['vae'])
         self.min_buckets = min_buckets
         self.max_buckets = max_buckets
 
@@ -59,19 +56,20 @@ class Dreamer(L.LightningModule):
         self.alpha_att  = alpha_att
         self.aplha_continue = aplha_continue
         self.alpha_reward = alpha_reward
+
+        self.encoding_dim = 2*internal_hidden_dim
         
         self.rssm = RSSM(
             action_dim=action_dim,
             deter_dim=h_dim,
-            obs_dim=internal_hidden_dim,
+            obs_dim=self.encoding_dim,
             stoch_latents=stoch_latents,
             stoch_classes=stoch_classes,
             embed_dim=rssm_hidden_dim,
             unimix=unimix,
         )
 
-        self.preprocess_callback = preprocess_callback
-        rssm_feat_dim = h_dim + (stoch_latents * stoch_classes) # h_dim + L*K
+        self.state_dim = h_dim + (stoch_latents * stoch_classes) # h_dim + L*K
         self.internal_hidden_dim  = internal_hidden_dim
         self.burn_in = burn_in
 
@@ -88,22 +86,10 @@ class Dreamer(L.LightningModule):
         self.encoder = VAEEncoderAdapter(self.vae, out_dim=internal_hidden_dim)
 
         # -- VAE decoder adapter
-        self.decoder = VAEDecoderAdapter(self.vae, feat_dim=internal_hidden_dim, decode_shape=decode_shape)
+        self.decoder = VAEDecoderAdapter(self.vae, feat_dim=self.state_dim, decode_shape=decode_shape)
 
         self.att_encoder = nn.Sequential(
             nn.Linear(att_dim, out_features=internal_hidden_dim),
-            nn.RMSNorm(internal_hidden_dim),
-            nn.SiLU()
-        )
-
-        self.encoder_proj = nn.Sequential(
-            nn.Linear(2*internal_hidden_dim, internal_hidden_dim),
-            #nn.RMSNorm(internal_hidden_dim),
-            #nn.SiLU()
-        )
-
-        self.feat_proj = nn.Sequential(
-            nn.Linear(rssm_feat_dim, internal_hidden_dim),
             nn.RMSNorm(internal_hidden_dim),
             nn.SiLU()
         )
@@ -114,12 +100,13 @@ class Dreamer(L.LightningModule):
         # reward predictor
 
         self.register_buffer("buckets", torch.linspace(min_buckets, max_buckets, buckets) ) 
+        
         self.reward_head = nn.Sequential(
-            nn.Linear(internal_hidden_dim, internal_hidden_dim*2),
-            nn.RMSNorm(internal_hidden_dim*2),
+            nn.Linear(self.state_dim, internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim),
             nn.SiLU(),
             
-            nn.Linear(internal_hidden_dim*2, internal_hidden_dim),
+            nn.Linear(internal_hidden_dim, internal_hidden_dim),
             nn.RMSNorm(internal_hidden_dim),
             nn.SiLU(),
             
@@ -130,11 +117,11 @@ class Dreamer(L.LightningModule):
 
         # continue predictor
         self.cont_head = nn.Sequential(
-            nn.Linear(internal_hidden_dim, internal_hidden_dim*2),
-            nn.RMSNorm(internal_hidden_dim*2),
+            nn.Linear(self.state_dim, internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim),
             nn.SiLU(),
 
-            nn.Linear(internal_hidden_dim*2, internal_hidden_dim),
+            nn.Linear(internal_hidden_dim, internal_hidden_dim),
             nn.RMSNorm(internal_hidden_dim),
             nn.SiLU(),
 
@@ -143,7 +130,7 @@ class Dreamer(L.LightningModule):
 
         # attribute predictor
         self.att_head = nn.Sequential(
-            nn.Linear(internal_hidden_dim, internal_hidden_dim),
+            nn.Linear(self.state_dim, internal_hidden_dim),
             nn.RMSNorm(internal_hidden_dim),
             nn.SiLU(),
             
@@ -171,28 +158,26 @@ class Dreamer(L.LightningModule):
         # scale trasformations for normalize values across different scenarios, encode targets
         with torch.no_grad():
             user_att = symlog(user_att)
+            obs = obs / 255
+            
             rewards  = symlog(rewards)
             two_hot_rewards = twohot(rewards, self.buckets)
         ######################################################################################
 
         # recostruction world attribute loss
         l_pred_bt, components = loss_prediction(
-            obs_hat, obs, 
-            buckets_log, two_hot_rewards, 
-            cont_hat,cont,
-            user_att_hat, user_att, 
-            mask=mask, 
-
-            beta_x=self.alpha_obs,
-            beta_att=self.alpha_att,
-            beta_c=self.aplha_continue,
-            beta_r=self.alpha_reward
+            obs_hat[:, 1:], obs[:, 1:], 
+            buckets_log[:, 1:], two_hot_rewards[:, 1:], 
+            cont_hat[:, 1:],     cont[:, 1:],
+            user_att_hat[:, 1:], user_att[:, 1:], 
+            mask=mask[:, 1:], 
+            beta_x=self.alpha_obs, beta_att=self.alpha_att, beta_c=self.aplha_continue, beta_r=self.alpha_reward
         )
         #######################################################################################
 
         # dynamic loss ########################################################################
-        l_dyn_bt  = loss_dynamic(q_logits, p_logits, mask=mask)
-        l_rep_bt  = loss_representation(q_logits, p_logits, mask=mask)
+        l_dyn_bt  = loss_dynamic(q_logits, p_logits, mask=mask)[:, 1:]
+        l_rep_bt  = loss_representation(q_logits, p_logits, mask=mask)[:, 1:]
         #######################################################################################
         
         
@@ -211,10 +196,8 @@ class Dreamer(L.LightningModule):
         loss_t = l_pred_bt + l_dyn_bt + l_rep_bt # [B,T]
         
       
-        length = mask.sum(dim=1).clamp(min=1).detach() # [t]
-
-        # weighted mean for batch [B]
-        loss_batch = loss_t.sum(-1) / length # [B]
+        length = mask[:, 1:].sum(dim=1).clamp(min=1).detach()
+        loss_batch = loss_t.sum(-1) / length
         
         # simple loss, long and short sequence same dominance (scalar)
         
@@ -247,16 +230,18 @@ class Dreamer(L.LightningModule):
     def configure_optimizers(self):
         return LaProp(self.parameters(), self.hparams.lr, eps=1e-20)
     
-    def encode(self, obs, user_att):
+    def encode(self, obs, user_att): # x_t encoding
         """Encode observation + world attributes"""
-        enc = self.encoder(obs)
+        obs = obs / 255
         user_att = symlog(user_att) # transform in symlog space
+        # singular encoders
+        enc = self.encoder(obs)
         att_user = self.att_encoder(user_att)
         
         # -- fuse obs with user att, use simple cat fusion
         enc = torch.cat([enc, att_user], dim=-1)
-        embs_encode_state = self.encoder_proj(enc)
-        return embs_encode_state
+        
+        return enc
 
  
     def predict_reward(self, feat):
@@ -282,9 +267,13 @@ class Dreamer(L.LightningModule):
         # Non usiamo STE qui perché vogliamo che la Loss sia pesata in modo differenziabile e soft.
         return probs
     
-    def predict_obs(self, feat):
+    def predict_obs(self, s):
         """Recostruct observed state"""
-        return self.decoder(feat) 
+        
+        obs = self.decoder(s)
+        
+       
+        return obs 
     
     def predict_user_att(self, feat):
         """Predict attribute of differentiable world"""
@@ -315,10 +304,10 @@ class Dreamer(L.LightningModule):
         # masks not required grads
         batch["mask_action"] =  batch["mask_action"].detach()
         batch["mask"] = batch["mask"].detach()
-    
-        # normalize observation in [0,1] range
-        if self.preprocess_callback is not None:
-            batch["obs"] = self.preprocess_callback(batch["obs"])
+        #####################################################
+
+        # use internal symlog normalization
+        batch["obs"] = batch["obs"].float()
        
         is_first = batch["is_first"] # [B] Tensor bool
         
@@ -331,13 +320,9 @@ class Dreamer(L.LightningModule):
                 "mask": batch["mask"][:, :self.burn_in]
             }
             
-            
-            
             T_total = batch["obs"].shape[1]
             T_train = T_total - self.burn_in
             
-            
-
             train_data = {
                 "obs":      select_data(batch["obs"], is_first, self.burn_in, T_train),
                 "action":   select_data(batch["action"], is_first, self.burn_in, T_train),
@@ -384,18 +369,18 @@ class Dreamer(L.LightningModule):
             "x": batch["obs"][0].detach().cpu()
         }
     
+    @torch.no_grad()
     def on_train_batch_end(self, outputs, batch, batch_idx):
-        obs = outputs["x"]
-        obs_hat = torch.sigmoid(outputs["x_hat"])
+      
+        x_hat = outputs["x_hat"] # [B, C, H, W]
+        x = outputs["x"] /255
         
-
+        
         if batch_idx == 0:
-            n = min(obs.size(0), 8)
-            comparison = torch.cat([obs[:n], obs_hat[:n]], dim=0)
-            grid = torchvision.utils.make_grid(comparison, nrow=n)
-            self.logger.experiment.add_image(
-                "val_reconstruction", grid, self.current_epoch
-            )
+
+            x_log = torch.cat([x[:8], x_hat[:8]], dim=0)
+            grid = torchvision.utils.make_grid(x_log[:16], nrow=8)
+            self.logger.experiment.add_image("reconstruction", grid, self.current_epoch)
     
 
 
@@ -407,29 +392,33 @@ class Dreamer(L.LightningModule):
         
         B, T, _, _, _ = obs.shape
         is_first = train_data["is_first"]
-        # -- init memory
-        state = self.rssm.init_state(B, device=obs.device)
+
+        # -- init memory t
+        state = self.rssm.init_state(B, device=obs.device) # t (z,h)
         burn_in = self.burn_in if self.training else 0
+        last_action = torch.zeros_like(train_data["action"][:, 0]) # t
+        ###########################################################
         
         # -- burn_in precedurre
         
         if burn_indata is not None:
-            actions = burn_indata["action"]
-            att_user = burn_indata["user_att"]
+            actions = burn_indata["action"] # t_+1
+            att_user = burn_indata["user_att"] # t_ +1
             mask = burn_indata["mask"]
             obs = burn_indata["obs"]
             with torch.no_grad():
                 
                 for t in range(burn_in):
-                    a_t = actions[:, t]
+                    #a_t = actions[:, t]
                     att_t = att_user[:, t]
                     m_t = mask[:, t]
                     obs_t = obs[:, t]
                     
-                    # Encoding dell'osservazione
+                    # encoding obs
                     x_t = self.encode(obs_t, att_t)
+                    state, _ = self.rssm.observe_step(state, last_action,  x_t, m_t)
                     
-                   
+                   # manage memory
                     mask_first = is_first.unsqueeze(-1).float() # Shape: [B, 1]
                     state.h = state.h * (1.0 - mask_first)
                     state.z = state.z * (1.0 - mask_first)
@@ -437,10 +426,13 @@ class Dreamer(L.LightningModule):
                    
                     mask_first_3d = mask_first.unsqueeze(-1)    # Shape: [B, 1, 1]
                     state.z_logits = state.z_logits * (1.0 - mask_first_3d)
-                    state, _ = self.rssm.observe_step(state, a_t, x_t, m_t)
+                    ##############################################################
+                    
+                    # select action a_t for s_t1
+                    last_action = actions[:, t] # get a_t
             
             
-                #####################################################################
+                # -- Reset memory for zero init chunks ###############################
        
                 mask_first = is_first.unsqueeze(-1).float() # Shape: [B, 1]
                 state.h = state.h * (1.0 - mask_first)
@@ -449,6 +441,8 @@ class Dreamer(L.LightningModule):
         
                 mask_first_3d = mask_first.unsqueeze(-1)    # Shape: [B, 1, 1]
                 state.z_logits = state.z_logits * (1.0 - mask_first_3d)
+
+        ######################################################################
 
         # -- store temp data
         actions = train_data["action"]
@@ -471,33 +465,34 @@ class Dreamer(L.LightningModule):
         # compute real length for data and ingnore padding during iteration
         
         
-        # -- compute loss
+        # -- prediction
         for t in range(T):
-            a_t = actions[:, t]
+            #a_t = actions[:, t]
             att_t = att_user[:, t]
             m_t = mask[:,t]
             obs_t = obs[:, t]
             #print(f"att shape: {att.shape}")
             x_t = self.encode(obs_t, att_t)  # encode observation + user attributes
-            state, plogits = self.rssm.observe_step(state, a_t, x_t, m_t)
+            state, plogits = self.rssm.observe_step(state, last_action, x_t, m_t)
+            
             post_h[:, t] = state.h
             post_z[:, t] = state.z
             post_logits[:, t] = state.z_logits
             prior_logits[:, t] = plogits
+            last_action = actions[:, t]
         ############################################################################
        
        
         # feactures vector
-        feat = torch.cat([post_h, post_z], dim=-1)     
-        feat = self.feat_proj(feat)
-
+        s_t = torch.cat([post_h, post_z], dim=-1)     
+        
         post_h = None
         post_z = None
         # predict world attributes
-        x_hat                   = self.predict_obs(feat)        # latent space              
-        r_hat_logits            = self.reward_head(feat)     # linear + twohot
-        att_hat                 = self.att_head(feat)   # symlog
-        c_logits                = self.cont_head(feat).squeeze(-1)   # linear (logits)
+        x_hat                   = self.predict_obs(s_t)        # latent space              
+        r_hat_logits            = self.reward_head(s_t)     # linear + twohot
+        att_hat                 = self.att_head(s_t)   # symlog
+        c_logits                = self.cont_head(s_t).squeeze(-1)   # linear (logits)
 
 
         return {

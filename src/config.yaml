@@ -9,15 +9,15 @@ global_config:
   Project_logs: "Project"
   action_shape: 24
   att_shape: 7
-
+  skip_frame: 1
   img_channels: 3
   img_size_h : 64
   img_size_l : 64
   dreamer_iterations: 1000
   dreamer_w: "weights/rssm/rssm.ckpt"
   policy_w : "weights/policy/policy.ckpt"
-  chunk: 64
-  precision: "32-true" 
+  chunk: 74
+  precision: "32-true" # bf16-mixed
 
   envs:
     - "VizdoomBasic-v1"
@@ -26,15 +26,15 @@ global_config:
     - 50
 
 vae_config:
-  latent_dim: 1024
-  model_dim: 1024
+  latent_dim: 256
+  model_dim: 256
 
 curiosity_config:
   alpha: 0.8
   beta: 0.1
   eps: 0.003
   p_max: 10
-  c: 0.01
+  c: 0.1
 
 rssm_config:
   sample_episodes: 100
@@ -43,42 +43,40 @@ rssm_config:
   train_batch: 16 
   burn_in: 15
   free_nats: 1.0
-  min_buckets: -20
-  max_buckets: 20
-  
+  min_buckets: -8   # ridotto da -20
+  max_buckets: 8    # ridotto da 20
 
   a_att: 1.0
-  a_obs: 1.0      
+  a_obs: 0.1      
   a_cont: 1.0
   a_rew: 1.0
   
- 
   detterministic_latent_dim: 1024 
-  rssm_latent_dim: 1024 
-  common_latent_dim: 1024
-  stochastic_latent: 32
-  stochastic_classes: 32
+  rssm_latent_dim: 256 
+  common_latent_dim: 256
+  stochastic_latent: 16
+  stochastic_classes: 16
   batch_acc: 1
   buckets: 255
   unimix: 0.01
   beta_dyn: 1.0
   beta_pred: 1.0
   beta_rep: 0.1
-  lr: 0.0001      
+  lr: 0.00008      
 
 policy_config:
-  sample_episodes: 100
+  sample_episodes: 200
   train_steps: 150
   buckets: 255
-  horizon: 15    
+  horizon: 20   
   burn_in: 15
-  lr: 0.00003     
-  actor_entropy: 0.0003 
-  train_batch: 16
+  lr: 0.00008    
+  actor_entropy: 0.0003  # aumentata da 0.00005
+  train_batch: 32         # aumentato da 16
   batch_acc: 1
-  hidden_dim: 1024
-  unimix: 0.01
+  hidden_dim: 256
+  unimix: 0.05
   ema_decay: 0.98
-  ema_epsilon: 0.000001 
-  min_buckets: -20
-  max_buckets: 20
+  ema_epsilon: 1.0
+  min_buckets: -8        # coerente con rssm
+  max_buckets:  8         # coerente con rssm

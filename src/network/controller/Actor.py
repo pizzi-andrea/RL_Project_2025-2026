@@ -27,7 +27,7 @@ class Actor(nn.Module):
         self.dist_pred = nn.Linear(in_features=hidden_dim, out_features=num_dist)
         
         # -- inizialize weights for low variance
-        torch.nn.init.orthogonal_(self.dist_pred.weight, gain=0.01) 
+        torch.nn.init.orthogonal_(self.dist_pred.weight, gain=1.0) 
         self.dist_pred.bias.data.fill_(0.0)
 
     def reparameterize_categorical(self, logits):
@@ -44,40 +44,27 @@ class Actor(nn.Module):
         x = self.l2(x)
         logits = self.dist_pred(x)
         
-        # --- Gestione Maschera e Unimix ---
         if valid_actions_mask is not None:
             mask = valid_actions_mask.bool()
-            # 1. Azzera logits invalidi
             logits = logits.masked_fill(~mask, -1e9)
             probs = F.softmax(logits, dim=-1)
-            
-            # 2. Calcola Unimix
-            num_valid = mask.sum(dim=-1, keepdim=True).clamp(min=1.0) # Clamp per sicurezza div/0
+            num_valid = mask.sum(dim=-1, keepdim=True).clamp(min=1.0)
             uniform = mask.float() / num_valid
         else:
             probs = F.softmax(logits, dim=-1)
             uniform = torch.full_like(probs, 1.0 / self.num_dist)
 
-        # 3. Mix finale (probs è già valido e somma a 1)
+        # Applica Unimix
         probs = (1.0 - self.unimix) * probs + self.unimix * uniform
         
-        # 4. Crea distribuzione
+        # Crea distribuzione e calcola entropia (SPOSTATO QUI FUORI)
         dist = OneHotCategorical(probs=probs)
         action = dist.sample()
-
         
-        
-        
-        if valid_actions_mask is not None:
-            p_log_p = probs * torch.log(probs + 1e-8)
-            entropy = -p_log_p.sum(dim=-1)
-
-            # normalizzazione opzionale
-            #num_valid = mask.sum(dim=-1).clamp(min=1.0)
-            #max_entropy = torch.log(num_valid)
-            #entropy = entropy / (max_entropy + 1e-8)
-
-       
+        # Calcolo entropia robusto
+        p_log_p = probs * torch.log(probs + 1e-8)
+        entropy = -p_log_p.sum(dim=-1)
+    
         return action, dist, entropy
 
     

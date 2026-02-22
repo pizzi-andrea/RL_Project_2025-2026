@@ -81,11 +81,13 @@ def loss_prediction(x_hat, x, r_hat, r, c_hat, c, att_hat, att, mask=None,
     """
     # loss for observation (graphical)
     #x_hat = F.sigmoid(x_hat)
-    loss_x = F.binary_cross_entropy_with_logits(x_hat, x, reduction='none').sum(dim=(2,3,4))   
+    loss_x = F.mse_loss(x_hat, x, reduction="none").sum(dim=(2,3,4))
+
+    discount = torch.cumprod(torch.cat([torch.ones_like(c_hat[:, :1]), 0.997 * c_hat[:, :-1]], dim=1), dim=1)
     loss_c = F.binary_cross_entropy_with_logits(c_hat, c, reduction='none')
     # 2. Reward Loss  
 
-    loss_r = reward_loss(r_hat, r, mask) 
+    loss_r = reward_loss(r_hat, r, mask)
     loss_att = symlog_loss(att_hat, att, mask)
 
     if mask is not None:
@@ -160,6 +162,7 @@ def symlog_loss(pred_symlog, real_symlog, mask=None):
         loss = loss*mask
     
     return loss
+
 
 def symexp(x, mm=-20.0, mx=20.0):
     #x = x.clamp(mm, mx)

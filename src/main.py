@@ -101,11 +101,7 @@ def main():
         return x
     
 
-    base_callback = Compose([
-        ToDtype(torch.float32, scale=True),
-        
-        
-    ])
+  
     image_processor = simple_preprocessor
     log_experiment = Path(config["global_config"]["Project_logs"])
     PER4train = CuriosityReplayPriority(
@@ -187,7 +183,7 @@ def main():
                 min_buckets         =   config["rssm_config"]["min_buckets"],
                 max_buckets         =   config["rssm_config"]["max_buckets"],
 
-                preprocess_callback=base_callback            
+                #preprocess_callback=base_callback            
         )
     else:
         rssm_model = Dreamer(
@@ -215,7 +211,7 @@ def main():
                 alpha_reward        =   config["rssm_config"]["a_rew"],
                 aplha_continue      =   config["rssm_config"]["a_cont"],
                 
-                preprocess_callback=base_callback
+                #preprocess_callback=base_callback
         ) 
     
     if args.load_weights and Path(config["global_config"]["policy_w"]).exists():
@@ -233,7 +229,7 @@ def main():
                     ema_epsilon         =   config["policy_config"]["ema_epsilon"],
                     min_buckets         =   config["policy_config"]["min_buckets"],
                     max_buckets         =   config["policy_config"]["max_buckets"],
-                    preprocess_callback =   base_callback,
+                    #preprocess_callback =   base_callback,
         
         )
     else:
@@ -251,7 +247,7 @@ def main():
                     ema_epsilon         =   config["policy_config"]["ema_epsilon"],
                     min_buckets         =   config["policy_config"]["min_buckets"],
                     max_buckets         =   config["policy_config"]["max_buckets"],
-                    preprocess_callback=base_callback,
+                    #preprocess_callback=base_callback,
                     
         )
     
@@ -310,8 +306,8 @@ def main():
         if (epoch > config["global_config"]["warmup"]):
             policy_trainer.fit(agent_model, train_dataloaders=policy_train_loader)
         
-            for env, n in zip(config["global_config"]["envs"], config["global_config"]["envs_episods"]):
-                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=1, max_length=config["global_config"]["max_episode_length"], preprocess=simple_preprocessor_float32, post_process=simple_post_processor)
+            for env, n in zip(config["global_config"]["envs"], config["global_config"]["envs_episodes"]):
+                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=config["global_config"]["skip_frame"], max_length=config["global_config"]["max_episode_length"], preprocess=simple_preprocessor_float32, post_process=simple_post_processor)
                 print(f"mean reword collected by policy {reword} in env {env}")
                 create_video_from_frames(best_path.joinpath("obs"), validation_log.joinpath(f"{env}_{epoch}.mp4"), 15)
                 

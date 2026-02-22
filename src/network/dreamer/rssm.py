@@ -9,9 +9,73 @@ import torch.nn as nn
 
 from .utils import *
 
+# Custom Grucell multiblock
+import torch
+import torch.nn as nn
+
+class DreamerGRUCell(nn.Module):
+    def __init__(self, input_size, hidden_size, num_blocks=8):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_blocks = num_blocks
+        self.block_size = hidden_size // num_blocks
+        
+        # 1. Proiezione dell'input verso tutti i gate di tutti i blocchi
+        # DreamerV3 usa una proiezione densa per l'input (zt, at, h_prev_mixed)
+        self.input_to_gates = nn.Linear(input_size, 3 * hidden_size, bias=False)
+        
+        # 2. Matrice Ricorrente Block-Diagonal (Implementata come Linear "Grouped")
+        # Usiamo un tensore [num_blocks, block_size, 3 * block_size] per calcolare i gate ricorrenti in parallelo
+        self.recurrent_weight = nn.Parameter(torch.empty(num_blocks, self.block_size, 3 * self.block_size))
+        self.recurrent_bias = nn.Parameter(torch.empty(3 * hidden_size))
+        
+        # 3. RMSNorm per la stabilizzazione (Critica in DreamerV3)
+        self.layer_norm = nn.RMSNorm(hidden_size)
+        
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.recurrent_weight)
+        nn.init.zeros_(self.recurrent_bias)
+
+    def forward(self, x, h_prev):
+        # x: [B, input_size]
+        # h_prev: [B, hidden_size]
+        B = x.shape[0]
+
+        # Calcolo gate dall'input (Densa)
+        gates_x = self.input_to_gates(x) # [B, 3 * hidden_size]
+
+        # Calcolo gate ricorrenti (Block-Diagonal)
+        # Reshape h_prev per operazione a blocchi: [B, num_blocks, block_size]
+        h_reshape = h_prev.view(B, self.num_blocks, self.block_size).transpose(0, 1) # [num_blocks, B, block_size]
+        
+        # Batch Matrix Multiplication parallela sui blocchi
+        gates_h = torch.bmm(h_reshape, self.recurrent_weight) # [num_blocks, B, 3 * block_size]
+        gates_h = gates_h.transpose(0, 1).reshape(B, 3 * self.hidden_size) # [B, 3 * hidden_size]
+
+        # Somma gate e bias
+        gates = gates_x + gates_h + self.recurrent_bias
+        
+        # Split gates: Reset (r), Update (z), New (n)
+        r, z, n = torch.split(gates, self.hidden_size, dim=-1)
+        
+        r = torch.sigmoid(r)
+        z = torch.sigmoid(z)
+        n = torch.tanh(n * r) # Reset gate applicato prima del tanh
+        
+        h_new = (1 - z) * n + z * h_prev
+        
+        # RMSNorm finale per prevenire la divergenza dei valori deterministici
+        return self.layer_norm(h_new)
+
 # -------------------------
 # RSSM (discrete latent)
 # -------------------------
+
+
+
+
 
 @dataclass
 class RSSMState:
@@ -89,21 +153,24 @@ class RSSM(nn.Module): # need specific train loop
             nn.SiLU()
         )
         self.block_size = deter_dim // self.num_gru_blocks
-        gru_input_size = 3 * embed_dim
-        self.gru = nn.ModuleList(
-            [nn.GRUCell(input_size=gru_input_size, hidden_size=self.block_size) for _ in range(self.num_gru_blocks)]
+        
+        gru_input_size = 3 * embed_dim # z_emb + a_emb + h_mixed_proj
+        self.gru_cell = DreamerGRUCell(
+            input_size=gru_input_size, 
+            hidden_size=self.deter_dim,  
+            num_blocks=self.num_gru_blocks
         )
-        # prior logits memory 
+        
         self.prior_net = nn.Sequential(
             nn.Linear(deter_dim, embed_dim), 
-            nn.LayerNorm(embed_dim),          
+            nn.RMSNorm(embed_dim),          
             nn.SiLU(),
             nn.Linear(embed_dim, self.output_dimension) 
         )
         # posterior logits observation + memory
         self.post_net = nn.Sequential(
             nn.Linear(deter_dim + obs_dim, embed_dim),
-            nn.LayerNorm(embed_dim),
+            nn.RMSNorm(embed_dim),
             nn.SiLU(),
             nn.Linear(embed_dim, self.output_dimension)
         )
@@ -117,115 +184,93 @@ class RSSM(nn.Module): # need specific train loop
         return RSSMState(h=h, z=z, z_logits=z_logits)
 
     
-    def _gru_step(self, prev_h: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+    def _gru_step(self, h_t: torch.Tensor, z_t: torch.Tensor) -> torch.Tensor:
         
-        h_proj_feat = self.h_proj(prev_h)
+        h_mixed = self.h_proj(h_t) 
+        # Unione di latente, azione e mixing (3 * embed_dim = 768)
+        gru_input = torch.cat([z_t, h_mixed], dim=-1) 
+        h_t1 = self.gru_cell(gru_input, h_t)
 
-        gru_input = torch.cat([z, h_proj_feat], dim=-1)
-
-        # split grup inputs in sublocks
-
-        gru_input_blocks = torch.split(prev_h, self.block_size, dim=-1)
-        h_next = []
-
-        for i, cell in enumerate(self.gru):
-            h_next.append( cell(gru_input, gru_input_blocks[i]) )
-
-        output_embeds = torch.cat(h_next, dim=-1)
-
-        return output_embeds
+        return h_t1
     
     
-    def imagine_step(self, state: RSSMState, action: torch.Tensor, mask_t: Optional[torch.Tensor]= None) -> Tuple[RSSMState, torch.Tensor]:
-        """Predict next state using the 'imagination' mechanism."""
-        
-        aemb = self.action_embed(action)
-        zemb = self.z_embed(state.z)
-        x = torch.cat([aemb, zemb], dim=-1)
-        
-        state_next_h, prior_logits_pure = self.compute_prior(state, x)        
-        z_new_flat, _ = logits2discrate(prior_logits_pure, self.L, self.K, self.unimix)
-
-        
-        
-        
-        return self.apply_mask(state_next_h, z_new_flat, state, prior_logits_pure, prior_logits_pure, mask_t)
     
-    def apply_mask(self, h_new, z_new, prev, post_logits, prior_logits, mask=None):
+    
+    def _apply_mask(self, h_new, z_new, prior_logits, post_logits=None, mask=None):
         """
+        Applica il masking allo stato RSSM e seleziona i logit corretti (Posterior se presente, altrimenti Prior).
         """
+        # Se post_logits è None (es. in fase di immaginazione), usiamo il prior come riferimento per lo stato
+        effective_logits = post_logits if post_logits is not None else prior_logits
+
         if mask is not None:
-            m = mask.float().unsqueeze(dim=-1)
-            
-           
-            h = m * h_new 
-            z = m * z_new
-            
+            # Espansione del mask per il broadcasting con h [B, H] e z [B, L*K]
+            m = mask.float().unsqueeze(-1)
+            # Espansione per i logit [B, L, K]
             m3 = mask.float().view(-1, 1, 1)
             
-            z_logits = m3 * post_logits 
+            h = h_new * m
+            z = z_new * m
+            z_logits = effective_logits * m3
             
-            #
             state = RSSMState(h=h, z=z, z_logits=z_logits)
         else:
-            state = RSSMState(h=h_new, z=z_new, z_logits=post_logits)
+            state = RSSMState(h=h_new, z=z_new, z_logits=effective_logits)
         
         return state, prior_logits
 
-    def compute_prior(self, hidden_state, x):
+    def _compute_prior(self, h_t, z_t, a_t): # return h_t1, z_hat_t1_log
         #x = self.gru_input_proj(x)
-        state_next = self._gru_step(hidden_state.h, x)
-        prior_logits = self.prior_net(state_next).view(-1, self.L, self.K)
+        seq_t = torch.cat([z_t, a_t], dim=-1) # 2* embed_dim
+        h_t1 = self._gru_step(h_t, seq_t)
+        z_hat_t1_log = self.prior_net(h_t1).view(-1, self.L, self.K)
 
-        return state_next, prior_logits
+        return h_t1, z_hat_t1_log
 
-    def compute_posterior(self, state, observation):
-        posterior = torch.cat([state, observation], dim=-1) # add observation
-        posterior_logits = self.post_net(posterior).view(-1, self.L, self.K)
+    def _compute_posterior(self, h_t1, x_t1): # return z_t_log
+        posterior = torch.cat([h_t1, x_t1], dim=-1) # add observation
+        z_t1_log = self.post_net(posterior).view(-1, self.L, self.K)
         
-        return posterior_logits
+        return z_t1_log
 
+    def imagine_step(self, state: RSSMState, action: torch.Tensor, mask_t: Optional[torch.Tensor]= None) -> Tuple[RSSMState, torch.Tensor]:
+        """Predict next state using the 'imagination' mechanism."""
+        
+        a_t = self.action_embed(action)
+        z_t = self.z_embed(state.z)
+        h_t = state.h
+       
+        h_t1, z_hat_t1_log = self._compute_prior(h_t, z_t, a_t)
+        # new sample from dist z_hat_t1
+        z_hat_t1 = logits2discrate(z_hat_t1_log, self.unimix)
+        return self._apply_mask(h_t1, z_hat_t1, z_hat_t1_log, mask=mask_t)
+    
 
     def observe_step(
         self,
         state: RSSMState,
-        action: torch.Tensor,
-        obs_encoded: torch.Tensor,
+        action_t: torch.Tensor,
+        x_t1: torch.Tensor, # t+1 !
         mask_t: Optional[torch.Tensor] = None,
     ) -> Tuple[RSSMState, torch.Tensor]:
         """Predict next state from observation and return network state"""
         
         # -- convert in homogeneus latent spaces
-        emb_action = self.action_embed(action)
-        emb_latent = self.z_embed(state.z)
+        a_t = self.action_embed(action_t)   # a_t
+        z_t = self.z_embed(state.z)         # z_t
+        h_t = state.h                       # h_t
         # -- 
         
         #print(f"DEBUG: emb_action shape {emb_action.shape}, emb_latent shape {emb_latent.shape}")
         #exit()
-        x = torch.cat([emb_action, emb_latent], dim=-1)
         
+        h_t1, z_hat_t1_log = self._compute_prior(h_t, z_t, a_t)
+        z_t1_log = self._compute_posterior(h_t1, x_t1)
         
-        h, prior_logits = self.compute_prior(state, x)
-
-        
-        posterior_logits = self.compute_posterior(h, obs_encoded)
         # Unimix Dreamer V3
-        
-        posterior_probs = unimix_probs(torch.softmax(posterior_logits, dim=-1), unimix=self.unimix)
-        posterior_logits_mix = torch.log_softmax(posterior_probs.clamp_min(1e-8), dim=-1)
-        ## --
-        
-        z_new = st_onehot(posterior_logits_mix)
-        z_new = z_new.view(-1, self.L * self.K)
+        z_t1 = logits2discrate(z_t1_log)
 
-        return self.apply_mask(
-            h,  
-            z_new, 
-            state, 
-            posterior_logits, 
-            prior_logits, 
-            mask_t
-        )
+        return self._apply_mask(h_t1, z_t1, z_hat_t1_log, z_t1_log, mask_t)
         
 
 

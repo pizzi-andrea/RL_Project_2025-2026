@@ -360,6 +360,7 @@ class CuriosityReplayPriority(PriorityExperienceReplay):
             priority_idx[i] = p_idx
             buffer_idx[i] = b_idx
 
+            self.count_buffer[p_idx] += 1
             # Probability of sampling this episode
             p_i = self.buffer.get_priority(p_idx) / total_priority
             p_i = max(p_i, 1e-8)
@@ -398,7 +399,7 @@ class CuriosityReplayPriority(PriorityExperienceReplay):
 
         for p_idx, p in zip(priority_idx, new_p):
             # Increment sample counter
-            self.count_buffer[p_idx] += 1
+            
             # Update the SumTree
             self.buffer.update_priority(int(p_idx), float(p))
 
