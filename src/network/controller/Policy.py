@@ -74,7 +74,7 @@ class DreamerAgent(L.LightningModule):
         #   lr: 0.00003
         #   eps: 1e-20
         params = list(self.actor.parameters()) + list(self.critic.parameters())
-        return LaProp(params, self.hparams.lr, eps=1e-20)
+        return LaProp(params, self.hparams.lr, eps=1e-8)
     
     def training_step(self, batch, batch_idx):
         """Dreamer traning procedure (burn in + dreamer)"""
@@ -143,16 +143,16 @@ class DreamerAgent(L.LightningModule):
             
             lambda_return = lambda_returns(
                 rewards=r_hat[:, :-1],
-                values=v_target,  # <--- CORREZIONE: usa i valori del target network
-                continues=c_hat
+                values=v_target,
+                continues=c_hat[:, :-1]
             ).detach()
-            v_bootstrap_replay = lambda_return[:, 0]
+            #v_bootstrap_replay = lambda_return[:, 0]
     
             
             lambda_return_r = lambda_returns(
                 rewards=r_buffer[:, :-1],
-                values=torch.cat([v_target_b[:, :-1], v_bootstrap_replay.unsqueeze(1)], dim=1), 
-                continues=c_buffer
+                values=v_target_b,
+                continues=c_buffer[:, :-1]
             ).detach()
 
             sym_lambda_return  = symlog(lambda_return)

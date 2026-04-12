@@ -38,7 +38,6 @@ class Actor(nn.Module):
     #    return probs + (sample - probs).detach()
     
     # In Actor.py
-    
     def forward(self, x, valid_actions_mask=None):
         x = self.l1(x)
         x = self.l2(x)
@@ -46,25 +45,28 @@ class Actor(nn.Module):
         
         if valid_actions_mask is not None:
             mask = valid_actions_mask.bool()
+            # 1. Forza i logit delle azioni non valide a un valore molto basso
             logits = logits.masked_fill(~mask, -1e9)
             probs = F.softmax(logits, dim=-1)
+            
+            # 2. Uniform solo sui tasti validi per non sprecare esplorazione
             num_valid = mask.sum(dim=-1, keepdim=True).clamp(min=1.0)
             uniform = mask.float() / num_valid
         else:
+            # Caso di fallback se non c'è maschera
             probs = F.softmax(logits, dim=-1)
             uniform = torch.full_like(probs, 1.0 / self.num_dist)
 
-        # Applica Unimix
+        # 3. Applica Unimix UNA SOLA VOLTA
         probs = (1.0 - self.unimix) * probs + self.unimix * uniform
         
-        # Crea distribuzione e calcola entropia (SPOSTATO QUI FUORI)
         dist = OneHotCategorical(probs=probs)
         action = dist.sample()
         
-        # Calcolo entropia robusto
+        # Calcolo entropia (sarà limitata a ln(num_valid))
         p_log_p = probs * torch.log(probs + 1e-8)
         entropy = -p_log_p.sum(dim=-1)
-    
+
         return action, dist, entropy
 
     

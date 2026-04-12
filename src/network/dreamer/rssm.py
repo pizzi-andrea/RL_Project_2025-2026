@@ -30,7 +30,7 @@ class DreamerGRUCell(nn.Module):
         self.recurrent_bias = nn.Parameter(torch.empty(3 * hidden_size))
         
         # 3. RMSNorm per la stabilizzazione (Critica in DreamerV3)
-        self.layer_norm = nn.RMSNorm(hidden_size)
+        self.layer_norm = nn.RMSNorm(3 * hidden_size)
         
         self.reset_parameters()
 
@@ -42,9 +42,12 @@ class DreamerGRUCell(nn.Module):
         # x: [B, input_size]
         # h_prev: [B, hidden_size]
         B = x.shape[0]
+        
 
         # Calcolo gate dall'input (Densa)
         gates_x = self.input_to_gates(x) # [B, 3 * hidden_size]
+        x = self.layer_norm(gates_x)
+        #gates_x = self.layer_norm(x)
 
         # Calcolo gate ricorrenti (Block-Diagonal)
         # Reshape h_prev per operazione a blocchi: [B, num_blocks, block_size]
@@ -66,8 +69,8 @@ class DreamerGRUCell(nn.Module):
         
         h_new = (1 - z) * n + z * h_prev
         
-        # RMSNorm finale per prevenire la divergenza dei valori deterministici
-        return self.layer_norm(h_new)
+        
+        return h_new
 
 # -------------------------
 # RSSM (discrete latent)

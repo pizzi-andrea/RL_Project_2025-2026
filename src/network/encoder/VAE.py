@@ -37,7 +37,7 @@ class StandardResidualBlock(nn.Module):
         return self.act(x + residual)
 
 class VAE(L.LightningModule):
-    def __init__(self, latent_dim: int, model_dim: int = 1024, input_res=(64, 64)):
+    def __init__(self, latent_dim: int, model_dim: int = 256, input_res=(64, 64)):
         super().__init__()
         self.save_hyperparameters()
         

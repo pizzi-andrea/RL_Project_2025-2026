@@ -182,6 +182,10 @@ def main():
                 buckets             =   config["rssm_config"]["buckets"],
                 min_buckets         =   config["rssm_config"]["min_buckets"],
                 max_buckets         =   config["rssm_config"]["max_buckets"],
+                alpha_obs           =   config["rssm_config"]["a_obs"],
+                alpha_att           =   config["rssm_config"]["a_att"],
+                alpha_reward        =   config["rssm_config"]["a_rew"],
+                aplha_continue      =   config["rssm_config"]["a_cont"],
 
                 #preprocess_callback=base_callback            
         )

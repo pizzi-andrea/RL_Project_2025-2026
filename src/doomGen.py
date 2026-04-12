@@ -30,7 +30,6 @@ if __name__ == "__main__":
     parser.add_argument("--sticky" ,required=False, action="store_true")
     parser.add_argument("--resolution_h", required=False, default=120, type=int)
     parser.add_argument("--resolution_w", required=False, default=160, type=int)
-    parser.add_argument("--multibinary", required=False, action="store_true")
     parser.add_argument("--crop", required=False, action="store_true")
     bucket_size = 500
     buckets = []
@@ -90,8 +89,7 @@ if __name__ == "__main__":
     buffer = []
     local_stat_name    =  [v.name for v in env.unwrapped.game.get_available_game_variables()]
     local_buttons_name = ['NO-OPP'] + [b.name for b in env.unwrapped.game.get_available_buttons()]
-    if args.multibinary:
-        local_buttons_name.pop(0)
+    
         
     act_mask = dict.fromkeys(DoomNames.buttons_names, 0)
     for b in local_buttons_name:

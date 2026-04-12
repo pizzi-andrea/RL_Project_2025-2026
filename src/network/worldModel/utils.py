@@ -191,7 +191,7 @@ def twohot(x, B):
     
     # 3. Clampiamo gli indici per evitare errori fuori range
     # Togliamo un epsilon (1e-5) per essere sicuri che l'indice massimo non sfori
-    idx = idx.clamp(0, num_buckets - 1 - 1e-5)
+    #idx = idx.clamp(0, num_buckets - 1 - 1e-5)
     
     # 4. Troviamo gli indici interi adiacenti (Lower e Upper)
     lower = idx.floor().long()
