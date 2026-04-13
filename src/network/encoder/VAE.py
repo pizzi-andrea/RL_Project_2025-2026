@@ -3,23 +3,26 @@ from torch import nn
 import lightning as L
 
 class StandardResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1):
+    """
+    Standard residual block for fine-features and resNET encoders and decoders
+    """
+    def __init__(self, in_channels, out_channels, stride=1, silu:bool=True):
         super().__init__()
        
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, 
                                stride=stride, padding=1, bias=False)
         
-        # Evitiamo crash se out_channels è minore di 8 nei modelli piccolissimi
+        
+        # remove batch dependence 
         groups = min(8, out_channels)
         self.gn1 = nn.GroupNorm(groups, out_channels) 
         
-       
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, 
-                               stride=1, padding=1, bias=False)
+        # performe convolution
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
         self.gn2 = nn.GroupNorm(groups, out_channels)
         
-      
-        self.act = nn.SiLU(inplace=True) 
+        # activation
+        self.act = nn.SiLU(inplace=True) if silu else nn.ReLU(inplace=True)
 
         # Shortcut per match delle dimensioni
         if stride != 1 or in_channels != out_channels:
@@ -37,11 +40,11 @@ class StandardResidualBlock(nn.Module):
         return self.act(x + residual)
 
 class VAE(L.LightningModule):
-    def __init__(self, latent_dim: int, model_dim: int = 256, input_res=(64, 64)):
+    """Variational Autoencoder"""
+    def __init__(self, latent_dim: int, model_dim: int = 256, input_res=(64, 64), silu:bool= True):
         super().__init__()
         self.save_hyperparameters()
         
-        # --- SCALATURA CANALI DREAMERV3 (d/16) ---
        
         mult = max(1, model_dim // 16) 
         
@@ -54,24 +57,27 @@ class VAE(L.LightningModule):
         self.last_h = input_res[0] // 8
         self.last_w = input_res[1] // 8
         
-        self.act = nn.SiLU(inplace=True)
+        self.act = nn.SiLU(inplace=True) if silu else nn.ReLU(inplace=True)
         
         # --- ENCODER ---
         self.encoder_net = nn.Sequential(
-            # Layer iniziale per "agganciare" i colori
+            
+            # init block
             nn.Conv2d(3, d1, kernel_size=7, stride=2, padding=3, bias=False), # res/2
             nn.GroupNorm(min(8, d1), d1),
             self.act,
             
-            StandardResidualBlock(d1, d2, stride=2),  # res/4
-            StandardResidualBlock(d2, d3, stride=2),  # res/8
-            StandardResidualBlock(d3, d4, stride=1),  # Bottleneck (mantiene res/8)
+            # res blocks
+            StandardResidualBlock(d1, d2, stride=2, silu=silu),  # res/4
+            StandardResidualBlock(d2, d3, stride=2, silu=silu),  # res/8
+            StandardResidualBlock(d3, d4, stride=1, silu=silu),  # Bottleneck (mantiene res/8)
             
-            
+            # out block
             nn.Conv2d(d4, d1, kernel_size=1),
             self.act
         )
 
+        
         flatten_dim = d1 * self.last_h * self.last_w
         
         # --- LATENT SPACE ---
@@ -109,12 +115,14 @@ class VAE(L.LightningModule):
         )
 
     def encode(self, x):
+        """Encode image"""
         x = self.encoder_net(x)
         x = torch.flatten(x, 1)
         hidden = self.fc_encoder(x)
         return self.mean_predictor(hidden), self.logvar_predictor(hidden)
 
     def decode(self, z):
+        """ decode features vector"""
         z = self.fc_decoder(z)
     
         d1 = max(1, self.hparams.model_dim // 16)
@@ -122,11 +130,33 @@ class VAE(L.LightningModule):
         return self.decoder_net(z)
 
     def reparameterize(self, mean, logvar):
+        """reparametrization trick for ff optimization"""
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mean + std * eps
 
     def forward(self, x):
+        """ forward step, full encode/decode step"""
         mean, logvar = self.encode(x)
         z = self.reparameterize(mean, logvar)
         return self.decode(z), mean, logvar
+    
+
+
+if __name__ == "__main__":
+    model = VAE(
+        latent_dim=63, model_dim=128, input_res=(64,64), silu=False
+    )
+
+    data = torch.zeros( (8, 3, 64, 64) )
+    print(data.shape)
+    m, v = model.encode(data)
+
+    print(f"encode dist: {m.shape}\n{v.shape}")
+
+    z = model.decode(m)
+
+    print(f"decode value: {z.shape}")
+
+    model(data)
+
