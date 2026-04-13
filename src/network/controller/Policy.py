@@ -18,8 +18,8 @@ class DreamerAgent(L.LightningModule):
     """Agent based on Dreamer model"""
     def __init__(self, dreamer_model:Dreamer|str, 
                  buckets:int=255,
-                 min_buckets:int=-10,
-                 max_buckets:int=10, 
+                 min_buckets:int=-20,
+                 max_buckets:int=20, 
                  action_space_dim:int=16, 
                  entropy_coef:int=0.0003,
                  horizon:int=15, 
@@ -157,8 +157,8 @@ class DreamerAgent(L.LightningModule):
 
             sym_lambda_return  = symlog(lambda_return)
             sym_lambda_return_b = symlog(lambda_return_r)
-            two_hot_lambda_return = twohot(sym_lambda_return, self.critic.buckets)
-            two_hot_lambda_return_b = twohot(sym_lambda_return_b, self.critic.buckets)
+            two_hot_lambda_return = twohot(sym_lambda_return, self.critic.buckets_linear)
+            two_hot_lambda_return_b = twohot(sym_lambda_return_b, self.critic.buckets_linear)
             #print("r_hat shape:", r_hat.shape)
             #print("r_hat min:", r_hat.min())
             #print("r_hat max:", r_hat.max())

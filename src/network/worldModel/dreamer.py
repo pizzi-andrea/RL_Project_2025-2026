@@ -99,8 +99,8 @@ class Dreamer(L.LightningModule):
 
         # reward predictor
 
-        self.register_buffer("buckets", torch.linspace(min_buckets, max_buckets, buckets) ) 
-        
+        self.register_buffer("buckets_linear", torch.linspace(min_buckets, max_buckets, buckets))
+        self.register_buffer("buckets", symexp(torch.linspace(min_buckets, max_buckets, buckets))) 
         self.reward_head = nn.Sequential(
             nn.Linear(self.state_dim, internal_hidden_dim),
             nn.RMSNorm(internal_hidden_dim),
@@ -161,7 +161,7 @@ class Dreamer(L.LightningModule):
             obs = obs / 255
             
             rewards  = symlog(rewards)
-            two_hot_rewards = twohot(rewards, self.buckets)
+            two_hot_rewards = twohot(rewards, self.buckets_linear)
         ######################################################################################
 
         # recostruction world attribute loss
@@ -250,8 +250,7 @@ class Dreamer(L.LightningModule):
         pred_rewards_buckets_log = self.reward_head(feat)
         pred_rewards_buckets_probs = self.softmax(pred_rewards_buckets_log)
 
-        pred_symlog = (pred_rewards_buckets_probs * B).sum(dim=-1)
-        pred_rewards = symexp(pred_symlog, self.min_buckets, self.max_buckets)
+        pred_rewards = (pred_rewards_buckets_probs * B).sum(dim=-1)
         return pred_rewards_buckets_log, pred_rewards.squeeze(-1)
     
     # In network/worldModel/dreamer.py

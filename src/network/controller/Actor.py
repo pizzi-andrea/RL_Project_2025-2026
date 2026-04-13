@@ -1,18 +1,18 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.distributions import Bernoulli, Independent, OneHotCategorical
+from torch.distributions import OneHotCategorical
 
 class Actor(nn.Module):
     """Actor network with unimix"""
-    def __init__(self, dim_state, num_dist, hidden_dim=1024, unimix=0.01, one_hot: bool = True):
+    def __init__(self, dim_state, num_dist, hidden_dim=1024, unimix=0.01):
         super().__init__()
         self.dim_state = dim_state
         self.num_dist = num_dist
         self.unimix = unimix
-        self.one_hot = one_hot 
         
-        # -- neteork layers
+        
+        # -- actor network layers
         self.l1 = nn.Sequential(
             nn.Linear(in_features=dim_state, out_features=hidden_dim),
             nn.RMSNorm(hidden_dim),
@@ -29,13 +29,6 @@ class Actor(nn.Module):
         # -- inizialize weights for low variance
         torch.nn.init.orthogonal_(self.dist_pred.weight, gain=1.0) 
         self.dist_pred.bias.data.fill_(0.0)
-
-    def reparameterize_categorical(self, logits):
-        return F.gumbel_softmax(logits, tau=1.0, hard=True)
-    
-    #def reparameterize_bernoulli(self, probs):
-    #    sample = torch.bernoulli(probs)
-    #    return probs + (sample - probs).detach()
     
     # In Actor.py
     def forward(self, x, valid_actions_mask=None):
@@ -59,13 +52,21 @@ class Actor(nn.Module):
 
         # 3. Applica Unimix UNA SOLA VOLTA
         probs = (1.0 - self.unimix) * probs + self.unimix * uniform
-        
         dist = OneHotCategorical(probs=probs)
-        action = dist.sample()
+
         
-        # Calcolo entropia (sarà limitata a ln(num_valid))
-        p_log_p = probs * torch.log(probs + 1e-8)
-        entropy = -p_log_p.sum(dim=-1)
+
+        if self.training:
+            action = dist.sample()
+            action = action + probs - probs.detach()
+        else:
+            index = probs.argmax(dim=-1, keepdim=True)
+            action = torch.zeros_like(probs).scatter_(-1, index, 1.0)
+
+
+        
+        
+        entropy = dist.entropy()
 
         return action, dist, entropy
 

@@ -1,12 +1,7 @@
 import cv2 as cv
-import numpy as np
 import torch 
 from torch import nn
-import torchvision.transforms.v2.functional as F
-import torchvision.io as io
-from PIL import Image
-from torch import Tensor, no_grad
-from torch.nn.functional import cross_entropy, sigmoid
+from torch.nn.functional import sigmoid
 class EMAScalar(nn.Module):
     def __init__(self, decay=0.98, eps=1e-6):
         super().__init__()

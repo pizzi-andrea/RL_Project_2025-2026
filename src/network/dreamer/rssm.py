@@ -164,13 +164,15 @@ class RSSM(nn.Module): # need specific train loop
             num_blocks=self.num_gru_blocks
         )
         
+        # predict encoded rappresentation z_hat given GRUcell hidden state and input rappresentation
         self.prior_net = nn.Sequential(
             nn.Linear(deter_dim, embed_dim), 
             nn.RMSNorm(embed_dim),          
             nn.SiLU(),
             nn.Linear(embed_dim, self.output_dimension) 
         )
-        # posterior logits observation + memory
+
+        # predict encoded rappresentation z_hat given only GRUcell hidden state 
         self.post_net = nn.Sequential(
             nn.Linear(deter_dim + obs_dim, embed_dim),
             nn.RMSNorm(embed_dim),
@@ -274,6 +276,3 @@ class RSSM(nn.Module): # need specific train loop
         z_t1 = logits2discrate(z_t1_log)
 
         return self._apply_mask(h_t1, z_t1, z_hat_t1_log, z_t1_log, mask_t)
-        
-
-
