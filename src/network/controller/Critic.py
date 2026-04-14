@@ -30,8 +30,8 @@ class Critic(nn.Module):
         self.buckets_proj = nn.Linear(in_features=hidden_dim, out_features=num_buckets)
         self.softmax = nn.Softmax(-1)
 
-        #self.buckets_proj.weight.data.fill_(0.0)
-        #self.buckets_proj.bias.data.fill_(0.0)  
+        self.buckets_proj.weight.data.fill_(0.0)
+        self.buckets_proj.bias.data.fill_(0.0)  
 
         self.target_critic = copy.deepcopy(self)
         for param in self.target_critic.parameters():

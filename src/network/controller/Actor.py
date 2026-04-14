@@ -35,40 +35,48 @@ class Actor(nn.Module):
         x = self.l1(x)
         x = self.l2(x)
         logits = self.dist_pred(x)
-        
+
+        # --- MASK ---
         if valid_actions_mask is not None:
             mask = valid_actions_mask.bool()
-            # 1. Forza i logit delle azioni non valide a un valore molto basso
             logits = logits.masked_fill(~mask, -1e9)
-            probs = F.softmax(logits, dim=-1)
-            
-            # 2. Uniform solo sui tasti validi per non sprecare esplorazione
+
+            # uniform SOLO sulle azioni valide
             num_valid = mask.sum(dim=-1, keepdim=True).clamp(min=1.0)
             uniform = mask.float() / num_valid
         else:
-            # Caso di fallback se non c'è maschera
-            probs = F.softmax(logits, dim=-1)
-            uniform = torch.full_like(probs, 1.0 / self.num_dist)
+            uniform = torch.full_like(logits, 1.0 / self.num_dist)
 
-        # 3. Applica Unimix UNA SOLA VOLTA
+        # --- LOG-SOFTMAX (STABILE) ---
+        log_probs = F.log_softmax(logits, dim=-1)
+        probs = log_probs.exp()
+
+        # --- UNIMIX (DreamerV3 style) ---
         probs = (1.0 - self.unimix) * probs + self.unimix * uniform
+
+        # ⚠️ IMPORTANTISSIMO: ricostruisci log_probs dopo unimix
+        log_probs = torch.log(probs + 1e-8)
+
         dist = OneHotCategorical(probs=probs)
 
-        
-
+        # --- ACTION ---
         if self.training:
-            action = dist.sample()
-            action = action + probs - probs.detach()
+            action_sample = dist.sample()
+            action = action_sample + probs - probs.detach()
+
+            # ✔️ log_prob coerente Dreamer
+            log_prob = (action_sample * log_probs).sum(-1)
+
         else:
             index = probs.argmax(dim=-1, keepdim=True)
             action = torch.zeros_like(probs).scatter_(-1, index, 1.0)
 
+            log_prob = (action * log_probs).sum(-1)
 
-        
-        
-        entropy = dist.entropy()
+        # --- ENTROPY (più stabile) ---
+        entropy = -(probs * log_probs).sum(-1)
 
-        return action, dist, entropy
+        return action, log_prob, entropy
 
     
 

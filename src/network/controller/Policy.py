@@ -157,6 +157,7 @@ class DreamerAgent(L.LightningModule):
 
             sym_lambda_return  = symlog(lambda_return)
             sym_lambda_return_b = symlog(lambda_return_r)
+            sym_v_hat = symlog(v_hat[:, :-1])
             two_hot_lambda_return = twohot(sym_lambda_return, self.critic.buckets_linear)
             two_hot_lambda_return_b = twohot(sym_lambda_return_b, self.critic.buckets_linear)
             #print("r_hat shape:", r_hat.shape)
@@ -187,9 +188,11 @@ class DreamerAgent(L.LightningModule):
         critic_loss_v = critic_l + (0.3 * critic_l_reply)
         
         # -- compute actor loss respect lambda_return and v_hat not in twohot encoding
+       
+    
         actor_loss_v, ema_scale, advantage, _ = actor_loss(
-            lambda_return, 
-            v_hat[:, :-1], 
+            sym_lambda_return, 
+            sym_v_hat, 
             a_hat_log_probs[:, :-1], 
             entropy[:, :-1], 
             self.ema, 
@@ -345,15 +348,16 @@ class DreamerAgent(L.LightningModule):
         rssm_state.z_logits = rssm_state.z_logits.detach()
 
         # -- immagination using rssm
+        s = torch.cat([rssm_state.h, rssm_state.z], dim=-1)
         for t in range(self.horizon):
             
             # act in imaginated state 
             
-            act_t1, dist_a, entropy = self.actor(s, mask_actions)
+            act_t1, log_p, entropy = self.actor(s, mask_actions)
             
             entropys[:, t] = entropy
             actions_out[:, t] = act_t1
-            log_probs[:, t] = dist_a.log_prob(act_t1)
+            log_probs[:, t] = log_p
             #####################################################
 
             # imagine new state using only h_t + a_t
