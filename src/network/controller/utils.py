@@ -141,7 +141,7 @@ def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, c
     per_step_objective = (normalized_advantage * action_log_prob) + (entropy_scale * entropy)
     masked_objective = per_step_objective * continues
     lengths = continues.sum(dim=1).clamp(min=1.0)
-    final_loss = -(masked_objective.sum() / lengths).mean()
+    final_loss = -(masked_objective.sum(dim=1) / lengths).mean()
     
     
     ema_scale = s.detach().cpu().numpy().mean()

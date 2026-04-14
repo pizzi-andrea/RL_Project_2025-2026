@@ -43,8 +43,8 @@ rssm_config:
   train_batch: 16 
   burn_in: 32
   free_nats: 1.0
-  min_buckets: -10
-  max_buckets: 10
+  min_buckets: -20
+  max_buckets: 20
 
   a_att: 1.0
   a_obs: 1.0
@@ -73,8 +73,8 @@ policy_config:
   train_batch: 16
   batch_acc: 1
   hidden_dim: 256
-  unimix: 0.03
+  unimix: 0.01
   ema_decay: 0.98
   ema_epsilon: 1.0
-  min_buckets: -10
-  max_buckets:  10
+  min_buckets: -20
+  max_buckets:  20
