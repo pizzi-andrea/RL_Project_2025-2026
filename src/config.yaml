@@ -4,8 +4,8 @@ PER_config:
 
 global_config:
   multi_cpu: 24
-  max_episode_length: 300
-  warmup: 0  # 10_000
+  max_episode_length: 500
+  warmup: 50
   Project_logs: "Project"
   action_shape: 24
   att_shape: 7
@@ -23,11 +23,11 @@ global_config:
     - "VizdoomBasic-v1"
 
   envs_episodes:
-    -  500
+    -  100
 
 vae_config:
-  latent_dim: 256
-  model_dim: 256
+  latent_dim: 1024
+  model_dim: 64
 
 curiosity_config:
   alpha: 0.8
@@ -37,12 +37,13 @@ curiosity_config:
   c: 0.1
 
 rssm_config:
-  sample_episodes: 200
+  sample_episodes: 100
   rssm_dataset_path_train: "Doom4RSSMs/train"
   train_steps: 500
   train_batch: 16 
-  burn_in: 32
+  burn_in: 15
   free_nats: 1.0
+
   min_buckets: -20
   max_buckets: 20
 
@@ -50,31 +51,32 @@ rssm_config:
   a_obs: 1.0
   a_cont: 1.0
   a_rew: 1.0
+
   detterministic_latent_dim: 1024 
-  rssm_latent_dim: 256 
-  common_latent_dim: 256
-  stochastic_latent: 16
-  stochastic_classes: 16
+  rssm_latent_dim: 512 
+  common_latent_dim: 1024
+  stochastic_latent: 64
+  stochastic_classes: 64
   batch_acc: 1
   buckets: 255
   unimix: 0.01
   beta_dyn: 1.0
   beta_pred: 1.0
   beta_rep: 0.1
-  lr: 0.0004
+  lr: 0.0005
 policy_config:
   sample_episodes: 200
   train_steps: 500
   buckets: 255
-  horizon: 60
-  burn_in: 5
-  lr: 0.0004
-  actor_entropy: 0.00005  # aumentata da 0.00005
+  horizon: 15
+  burn_in: 15
+  lr: 0.0005
+  actor_entropy: 0.001  # aumentata da 0.00005
   train_batch: 16
   batch_acc: 1
   hidden_dim: 256
   unimix: 0.01
-  ema_decay: 0.98
+  ema_decay: 0.99
   ema_epsilon: 1.0
   min_buckets: -20
   max_buckets:  20

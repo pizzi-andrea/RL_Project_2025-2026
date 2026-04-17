@@ -30,7 +30,7 @@ class Actor(nn.Module):
         torch.nn.init.orthogonal_(self.dist_pred.weight, gain=1.0) 
         self.dist_pred.bias.data.fill_(0.0)
     
-    # In Actor.py
+  
     def forward(self, x, valid_actions_mask=None):
         x = self.l1(x)
         x = self.l2(x)
@@ -54,27 +54,22 @@ class Actor(nn.Module):
         # --- UNIMIX (DreamerV3 style) ---
         probs = (1.0 - self.unimix) * probs + self.unimix * uniform
 
-        # ⚠️ IMPORTANTISSIMO: ricostruisci log_probs dopo unimix
+        # convert in log-prob
         log_probs = torch.log(probs + 1e-8)
 
         dist = OneHotCategorical(probs=probs)
 
         # --- ACTION ---
         if self.training:
-            action_sample = dist.sample()
-            action = action_sample + probs - probs.detach()
-
-            # ✔️ log_prob coerente Dreamer
-            log_prob = (action_sample * log_probs).sum(-1)
+            action = dist.sample()
+            
 
         else:
             index = probs.argmax(dim=-1, keepdim=True)
             action = torch.zeros_like(probs).scatter_(-1, index, 1.0)
 
-            log_prob = (action * log_probs).sum(-1)
-
-        # --- ENTROPY (più stabile) ---
-        entropy = -(probs * log_probs).sum(-1)
+        log_prob = dist.log_prob(action)
+        entropy =dist.entropy()
 
         return action, log_prob, entropy
 

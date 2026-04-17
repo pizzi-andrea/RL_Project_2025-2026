@@ -171,15 +171,16 @@ def symexp(x, mm=-20.0, mx=20.0):
 @torch.no_grad()
 def twohot(x, B):
     """
-    Codifica Two-Hot robusta per bucket equidistanti.
+    Robust twohot encoding
     
     Args:
-        x: Target scalari (symlog), shape [Batch, T]
+        x: uncoded input
         B: Centri dei bucket, shape [Num_Buckets] (assunto linspace ordinato)
     Returns:
         out: Distribuzione Two-Hot, shape [Batch, T, Num_Buckets]
     """
     # 1. Calcoliamo lo step dei bucket (assumendo linspace)
+    x = symlog(x)
     min_b = B[0]
     max_b = B[-1]
     num_buckets = B.shape[0]

@@ -3,7 +3,7 @@
 import lightning as L
 import numpy as np
 import torch
-
+import copy
 from torch import nn
 from timm.optim.laprop import LaProp
 from torch.optim import Adam
@@ -55,6 +55,19 @@ class DreamerAgent(L.LightningModule):
         # -- Define Actor-critic Structure
         self.actor = Actor(dim_state=self.emb_dim, num_dist=action_space_dim, unimix=unimix, hidden_dim=hidden_dim)
         self.critic = Critic(dim_state=self.emb_dim, num_buckets=buckets, min_buckets=min_buckets, max_buckets=max_buckets, hidden_dim=hidden_dim)
+        self.target = copy.deepcopy(self.critic)
+
+        for param in self.target.parameters():
+            param.requires_grad = False
+        
+        self.target_decay = 0.98
+    
+    def update_target(self):
+       
+        with torch.no_grad():
+            for param, target_param in zip(self.critic.parameters(), self.target.parameters()):
+                target_param.data.mul_(self.target_decay).add_((1.0 - self.target_decay) * param.data)
+    
 
    
     
@@ -87,124 +100,109 @@ class DreamerAgent(L.LightningModule):
 
         # -- unpack data
         is_first = batch["is_first"] # [B]
+        obs = batch["obs"]
+        actions = batch["action"]
+        user_att = batch["user_att"]
+        mask = batch["mask"]
+
         
-        
-        if batch["obs"].shape[1] > self.burn_in:
-            obs = batch["obs"][:, :self.burn_in]
-            actions = batch["action"][:, :self.burn_in]
-            user_att = batch["user_att"][:, :self.burn_in]
-            mask = batch["mask"][:, :self.burn_in]
-            # target from replay
-            r_buffer = batch["reward"][:, :self.burn_in]
-            c_buffer = batch["continue"][:, :self.burn_in]
-        else:
-           
-            obs = batch["obs"]
-            actions = batch["action"]
-            user_att = batch["user_att"]
-            mask = batch["mask"]
-             # target from replay
-            r_buffer = batch["reward"]
-            c_buffer = batch["continue"]
-            
+
         mask_a = batch["mask_action"]
 
         
 
         # Passiamo is_first al forward per il reset
-        output = self.forward(obs, actions, user_att, is_first, mask, mask_a)
+        output = self.forward(obs, actions, user_att, is_first, self.burn_in,  mask, mask_a)
+
+        # use only for target #################
+        r_buffer = batch["reward"][:, self.burn_in:]
+        c_buffer = batch["continue"][:, self.burn_in:]
+        states_target = output["observation"]
+        #######################################
 
        
 
         # -- unpack output
         states_hat = output["imagination"] # imm. step
-        states_buffer = output["prediction"] # obs step
+        
 
-        r_hat= output["rewards"] # in twohot
-        c_hat = output["continues"]
+        r_hat= output["rewards"]    # twohot
+        c_hat = output["continues"] # linear
         #a_hat = output["actions"]
         entropy = output["entropy"]
-        a_hat_log_probs = output["log_probs"]
+        a_hat_log_probs = output["log_probs"] # linear
         
         
 
         # -- critic: estimate expected values and lambda-return
-        v_hat_log, v_hat = self.critic(states_hat)
-        v_hat_log_b, v_hat_b = self.critic(states_buffer)
-
+        v_hat_log_critic, v_hat_critic = self.critic(states_hat)
+        v_target_log_critic, v_target = self.critic(states_target)
         
 
         with torch.no_grad():
-            v_target_log, v_target = self.critic.target_critic(states_hat)
-            v_target_log_b, v_target_b = self.critic.target_critic(states_buffer)
+            # -- target: copy of critic network use how target network to stabilize the traning
+            v_hat_log_target, v_hat_target = self.target(states_hat)
+            v_target_log_target, v_target_target = self.target(states_target)
+           
         
-            discount = torch.cumprod(torch.cat([torch.ones_like(c_hat[:, :1]), 0.997 * c_hat[:, :-1]], dim=1), dim=1)
-            discount_buffer = torch.cumprod(torch.cat([torch.ones_like(c_buffer[:, :1]), 0.997 * c_buffer[:, :-1]],dim=1),dim=1)
+            discount_c = torch.cumprod(torch.cat([torch.ones_like(c_hat[:, :1]), 0.997 * c_hat[:, :-1]], dim=1), dim=1)
+            discount_t = torch.cumprod(torch.cat([torch.ones_like(c_buffer[:, :1]), 0.997 * c_buffer[:, :-1]], dim=1), dim=1)
+            
             
             lambda_return = lambda_returns(
                 rewards=r_hat[:, :-1],
-                values=v_target,
+                values=v_hat_target,
                 continues=c_hat[:, :-1]
-            ).detach()
-            #v_bootstrap_replay = lambda_return[:, 0]
-    
-            
-            lambda_return_r = lambda_returns(
-                rewards=r_buffer[:, :-1],
-                values=v_target_b,
-                continues=c_buffer[:, :-1]
-            ).detach()
+            )
 
-            sym_lambda_return  = symlog(lambda_return)
-            sym_lambda_return_b = symlog(lambda_return_r)
-            sym_v_hat = symlog(v_hat[:, :-1])
-            two_hot_lambda_return = twohot(sym_lambda_return, self.critic.buckets_linear)
-            two_hot_lambda_return_b = twohot(sym_lambda_return_b, self.critic.buckets_linear)
-            #print("r_hat shape:", r_hat.shape)
-            #print("r_hat min:", r_hat.min())
-            #print("r_hat max:", r_hat.max())
-            #print("hat_mean", r_hat.mean())
+            lambda_return_target = lambda_returns(
+                rewards=r_buffer[:, :-1],
+                values=v_target_target,
+                continues=c_buffer[:, :-1]
+            )
+
+            two_hot_lambda_return_target  = twohot(lambda_return_target, self.target.buckets)
+            two_hot_lambda_return= twohot(lambda_return, self.critic.buckets) 
+          
             
-            #print("c_t_tot", (c_hat > 0.5).sum())
+
         ###################################################################################
         
         
         # -- evaluate critic respect lambda return in twohot encoding
         critic_l = critic_loss(
-            v_hat_log[:, :-1], 
-            v_target_log[:, :-1],
+            v_hat_log_critic[:, :-1],
             two_hot_lambda_return, 
-            continues=discount[:, :-1]
-        )
-        # --  lambda return computed on real values (burn-in data)
-        critic_l_reply = critic_loss(
-            v_hat_log_b[:, :-1],
-            v_target_log_b[:, :-1],
-            two_hot_lambda_return_b,
-            continues=discount_buffer[:, :-1],
-
+            discount_c[:, :-1]
         )
 
-        critic_loss_v = critic_l + (0.3 * critic_l_reply)
+        critic_l_target = critic_loss(
+            v_target_log_target[:, :-1],
+            two_hot_lambda_return_target, 
+            discount_t[:, :-1]
+        )
+        
+
+        critic_loss_v = critic_l + (0.3 * critic_l_target)
         
         # -- compute actor loss respect lambda_return and v_hat not in twohot encoding
        
     
         actor_loss_v, ema_scale, advantage, _ = actor_loss(
-            sym_lambda_return, 
-            sym_v_hat, 
+            lambda_return, 
+            v_hat_critic[:, :-1], 
             a_hat_log_probs[:, :-1], 
             entropy[:, :-1], 
             self.ema, 
             entropy_scale=self.entropy_coef,
-            continues=discount[:, :-1]
+            continues=discount_c[:, :-1]
         )
         
         # -- ignore terminated steps
 
         loss = critic_loss_v + actor_loss_v
 
-        valid_mask = discount[:, :-1]
+        valid_mask = discount_c[:, :-1]
         lengths = valid_mask.sum(dim=1).clamp(min=1)
         with torch.no_grad():
             # Lambda return medio per traiettoria, poi media del batch
@@ -222,7 +220,7 @@ class DreamerAgent(L.LightningModule):
             "train_loss"    : loss.item(),
             "actor_loss"    : actor_loss_v.item(),
             "critic_loss"   : critic_loss_v.item(),
-            "critic_reply_l"  : critic_l_reply.item(),
+            "critic_reply_l"  : critic_l_target.item(),
             "lambda_return" : log_lambda.mean().item(),
             "mean_reward"   : log_reward.mean().item(),
             "entropy"       :log_entropy.mean().item(),
@@ -239,7 +237,7 @@ class DreamerAgent(L.LightningModule):
     
     @torch.no_grad()
     def on_train_batch_end(self, outputs, batch, batch_idx):
-        self.critic.update_target_critic()
+        self.update_target()
         obs = outputs["imagination"]
         burn = outputs["burn"]
         obs = self.dreamer_model.predict_obs(obs)
@@ -283,10 +281,10 @@ class DreamerAgent(L.LightningModule):
             #video_path = Path(self.logger.log_dir).joinpath(f"train_dream_epoch_{self.current_epoch}.avi")
             #make_video(decoded_logits, video_path, fps=30)
         
-    def forward(self, obs, action, user_att,is_first, mask=None, mask_actions=None, rssm_state=None) :
+    def forward(self, obs, action, user_att, is_first, burn_in, mask=None, mask_actions=None, rssm_state=None) :
         
         B, T, _, _, _ = obs.shape
-        actual_burn_in = T if self.training else 0
+        T = T if self.training else 0
         # -- encode attribute player with obs
         mask_first = is_first.unsqueeze(-1).float().to(self.device)
         x = self.dreamer_model.encode(obs, user_att)
@@ -304,51 +302,46 @@ class DreamerAgent(L.LightningModule):
         actions_out   = torch.zeros(B, self.horizon, action.shape[-1], device=obs.device)
         log_probs     = torch.zeros(B, self.horizon, device=obs.device)
         latent_states = torch.zeros(B, self.horizon, self.emb_dim, device=obs.device)
-
-        latent_states_real = torch.zeros(B, actual_burn_in, self.emb_dim, device=obs.device)
+        
+        h_rnn = torch.zeros(B, T, rssm_state.h.shape[-1], device=obs.device)
+        z_rnn = torch.zeros(B, T, rssm_state.z.shape[-1], device=obs.device)
+        
         last_action = torch.zeros_like(action[:, 0])
-
-        #reward_real        = torch.zeros(B, burn_in, device=obs.device)
-        #continues_real     = torch.zeros(B, burn_in, device=obs.device)
-        #entropys_real      = torch.zeros(B, burn_in, device=obs.device)
-        #actions_out_real   = torch.zeros(B, burn_in, action.shape[-1], device=obs.device)
-        #log_probs_real     = torch.zeros(B, burn_in, device=obs.device)
         
         
         
         
         with torch.no_grad():
-            for t in range(actual_burn_in):
-                #rssm_state.h = rssm_state.h * (1.0 - mask_first)
-                #rssm_state.z = rssm_state.z * (1.0 - mask_first)
+            for t in range(T):
+                rssm_state.h = rssm_state.h * (1.0 - mask_first)
+                rssm_state.z = rssm_state.z * (1.0 - mask_first)
                 
                 x_t = x[:, t]
                 m = mask[:, t]
                 rssm_state, _ = self.rssm.observe_step(rssm_state, last_action, x_t, m)
-                s = torch.cat([rssm_state.h, rssm_state.z], dim=-1)
-                latent_states_real[:, t] = s
-                #action_t = action[:, t]
                 
-                #continues_real[:, t] = self.dreamer_model.predict_continue(embed)
-                
+                h_rnn[:, t] = rssm_state.h
+                z_rnn[:, t] = rssm_state.z
                 last_action = action[:, t]
         
-        # -- for security detach gradients
+
         # coerent reset for imagination steps
+            rssm_state.h = h_rnn[:, burn_in]
+            rssm_state.z = z_rnn[:, burn_in]
+            
+            rssm_state.z = rssm_state.z * (1.0 - mask_first)
             mask_first = is_first.unsqueeze(-1).float() # Shape: [B, 1]
+            
             rssm_state.h = rssm_state.h * (1.0 - mask_first)
             rssm_state.z = rssm_state.z * (1.0 - mask_first)
             
             mask_first_3d = mask_first.unsqueeze(-1)    # Shape: [B, 1, 1]
             rssm_state.z_logits = rssm_state.z_logits * (1.0 - mask_first_3d)
             
-        # stop gradients for immagination phase
-        rssm_state.z = rssm_state.z.detach()
-        rssm_state.h = rssm_state.h.detach()
-        rssm_state.z_logits = rssm_state.z_logits.detach()
+        
 
         # -- immagination using rssm
-        s = torch.cat([rssm_state.h, rssm_state.z], dim=-1)
+        s = torch.cat([rssm_state.h, rssm_state.z], dim=-1).detach()
         for t in range(self.horizon):
             
             # act in imaginated state 
@@ -362,10 +355,8 @@ class DreamerAgent(L.LightningModule):
 
             # imagine new state using only h_t + a_t
             rssm_state, _ = self.rssm.imagine_step(rssm_state, act_t1)
-            rssm_state.h = rssm_state.h.detach()
-            rssm_state.z = rssm_state.z.detach()
-            rssm_state.z_logits = rssm_state.z_logits.detach()
-            s = torch.cat([rssm_state.h, rssm_state.z], dim=-1)
+
+            s = torch.cat([rssm_state.h, rssm_state.z], dim=-1).detach()
             latent_states[:, t] = s
 
             
@@ -380,6 +371,8 @@ class DreamerAgent(L.LightningModule):
             #####################################################
         
         # -- pack values
+
+        observation = torch.cat([h_rnn[:, burn_in:], z_rnn[:, burn_in:]], dim=-1)
         return {
             "rewards"       : reward, 
             "continues"     : continues,
@@ -387,8 +380,8 @@ class DreamerAgent(L.LightningModule):
             "imagination"   : latent_states,
             "actions"       : actions_out,
             "log_probs"     : log_probs,
+            "observation"   : observation
             #"continue_r"    : continues_real,
-            "prediction"    : latent_states_real 
         }
 
         

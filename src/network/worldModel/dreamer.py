@@ -44,7 +44,7 @@ class Dreamer(L.LightningModule):
         alpha_reward:float=1.0,
         
         unimix: float = 0.01,
-        # --- nuove opzioni VAE --- 
+       
         vae: Optional[str]|VAE|None = None
     ):
         super().__init__()
@@ -100,7 +100,9 @@ class Dreamer(L.LightningModule):
         # reward predictor
 
         self.register_buffer("buckets_linear", torch.linspace(min_buckets, max_buckets, buckets))
-        self.register_buffer("buckets", symexp(torch.linspace(min_buckets, max_buckets, buckets))) 
+        self.register_buffer("buckets", torch.linspace(min_buckets, max_buckets, buckets))
+        
+        # reward network ############################################
         self.reward_head = nn.Sequential(
             nn.Linear(self.state_dim, internal_hidden_dim),
             nn.RMSNorm(internal_hidden_dim),
@@ -113,6 +115,8 @@ class Dreamer(L.LightningModule):
             nn.Linear(internal_hidden_dim, buckets),
     
         )
+        ##############################################################
+
         self.softmax = nn.Softmax(dim=-1)
 
         # continue predictor
@@ -138,6 +142,7 @@ class Dreamer(L.LightningModule):
         )
     
     def compute_loss(self, out, batch, free_n=0):
+
         # unpack data
         mask = batch["mask"]
         obs = batch["obs"]           
@@ -155,13 +160,11 @@ class Dreamer(L.LightningModule):
         user_att_hat = out["att_hat"]
         buckets_log = out["buckets_log"]
 
-        # scale trasformations for normalize values across different scenarios, encode targets
+        
         with torch.no_grad():
-            user_att = symlog(user_att)
-            obs = obs / 255
-            
-            rewards  = symlog(rewards)
-            two_hot_rewards = twohot(rewards, self.buckets_linear)
+            user_att = symlog(user_att) # symlog target user attribute
+            obs = obs / 255             # imgs normalization
+            two_hot_rewards = twohot(rewards, self.buckets_linear)  # robust encoding for high variance prediction (rewards model)
         ######################################################################################
 
         # recostruction world attribute loss
@@ -375,8 +378,7 @@ class Dreamer(L.LightningModule):
         x = outputs["x"] /255
         
         
-        if batch_idx == 0:
-
+        if batch_idx == 0: # use only first batch for logging
             x_log = torch.cat([x[:8], x_hat[:8]], dim=0)
             grid = torchvision.utils.make_grid(x_log[:16], nrow=8)
             self.logger.experiment.add_image("reconstruction", grid, self.current_epoch)
@@ -455,11 +457,12 @@ class Dreamer(L.LightningModule):
         z_dim = self.rssm.L * self.rssm.K
         L, K = self.rssm.L, self.rssm.K
 
-        # allocate buffers
+        # allocate buffers #######################################
         post_h      = torch.zeros(B, T, h_dim, device=obs.device)
         post_z      = torch.zeros(B, T, z_dim, device=obs.device)
         post_logits = torch.zeros(B, T, L, K, device=obs.device)
         prior_logits = torch.zeros(B, T, L, K, device=obs.device)
+        ##########################################################
 
         # compute real length for data and ingnore padding during iteration
         
@@ -471,28 +474,33 @@ class Dreamer(L.LightningModule):
             m_t = mask[:,t]
             obs_t = obs[:, t]
             #print(f"att shape: {att.shape}")
-            x_t = self.encode(obs_t, att_t)  # encode observation + user attributes
-            state, plogits = self.rssm.observe_step(state, last_action, x_t, m_t)
+            x_t = self.encode(obs_t, att_t)                                         #  encode observation + user attributes
+            state, plogits = self.rssm.observe_step(state, last_action, x_t, m_t)   #  compute post
             
+            # hidden state #########################################################
             post_h[:, t] = state.h
             post_z[:, t] = state.z
+            ########################################################################
+
             post_logits[:, t] = state.z_logits
             prior_logits[:, t] = plogits
             last_action = actions[:, t]
         ############################################################################
        
        
-        # feactures vector
+        # state vectors ##########################
         s_t = torch.cat([post_h, post_z], dim=-1)     
+        ##########################################
         
         post_h = None
         post_z = None
-        # predict world attributes
-        x_hat                   = self.predict_obs(s_t)        # latent space              
-        r_hat_logits            = self.reward_head(s_t)     # linear + twohot
-        att_hat                 = self.att_head(s_t)   # symlog
-        c_logits                = self.cont_head(s_t).squeeze(-1)   # linear (logits)
 
+        # predict world attributes ####################################################
+        x_hat                   = self.predict_obs(s_t)             # latent space              
+        r_hat_logits            = self.reward_head(s_t)             # twohot(symlog)
+        att_hat                 = self.att_head(s_t)                # symlog
+        c_logits                = self.cont_head(s_t).squeeze(-1)   # linear (logits)
+        ###############################################################################
 
         return {
             "x_hat": x_hat,
