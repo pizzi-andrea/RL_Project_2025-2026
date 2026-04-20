@@ -264,9 +264,10 @@ class DreamerAgent(L.LightningModule):
 
         embed_input = self.dreamer_model.encode(obs, att_user)
         
-        new_rssm_state, _ = self.rssm.observe_step(rssm_state, old_act, embed_input)
+        new_rssm_state, _, _ = self.rssm.observe_step(rssm_state, old_act, embed_input)
 
-        s = torch.cat([new_rssm_state.h, new_rssm_state.z], dim=-1)
+        z_flat = self.rssm.compute_stochastic(new_rssm_state.z)
+        s = torch.cat([new_rssm_state.h, z_flat], dim=-1)
         
         
         action, _, _ = self.actor(s, mask_actions)
