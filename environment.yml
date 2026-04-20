@@ -6,24 +6,21 @@ channels:
 dependencies: # conda dependences
   - python=3.12
   - pip
-  - pip: # packages 
-    
-    # fixed version libs
-    - torch==2.9.1
-    # free version libs
-    - numpy
-    - vizdoom
-    - pandas
-    - pandas[performance]
-    - matplotlib
-    - seaborn
-    - torchmetrics
-    - torchvision
-    - lightning
-    - tqdm
-    - opencv-python
-    - timm
-    - rich
-
-
-    
+  - opencv
+  - pip: # packages
+      # fixed version libs
+      - torch
+      # free version libs
+      - tensorboard
+      - numpy
+      - vizdoom
+      - pandas
+      - pandas[performance]
+      - matplotlib
+      - seaborn
+      - torchmetrics
+      - torchvision
+      - lightning
+      - tqdm
+      - timm
+      - rich
