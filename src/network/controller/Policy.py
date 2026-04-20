@@ -352,7 +352,3 @@ class DreamerAgent(L.LightningModule):
 
         return state, last_action            
 
-
-                
-        
-        

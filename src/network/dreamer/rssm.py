@@ -63,10 +63,6 @@ class DreamerGRUCell(nn.Module):
 # RSSM (discrete latent)
 # -------------------------
 
-
-
-
-
 @dataclass
 class RSSMState:
     h: torch.Tensor      # [B,H]
@@ -94,19 +90,6 @@ class RSSM(nn.Module): # need specific train loop
     ):
         """
         Recurrent State Space Model (RSSM) that manages deterministic and stochastic state transitions.
-        
-        :param action_dim: Dimension of the action space.
-        :type action_dim: int
-        :param deter_dim: Dimension of the GRU's deterministic hidden state (h).
-        :type deter_dim: int
-        :param stoch_latents: Number of discrete latent variables (L) in the stochastic state (z).
-        :type stoch_latents: int
-        :param stoch_classes: Number of categories (K) for each discrete latent variable.
-        :type stoch_classes: int
-        :param embed_dim: Internal projection dimension for actions, states, and observations.
-        :type embed_dim: int
-        :param unimix: Mixing ratio for uniform distribution in the categorical prior to prevent collapse.
-        :type unimix: float
         """
         super().__init__()
         self.num_gru_blocks = num_gru_blocks
@@ -189,9 +172,6 @@ class RSSM(nn.Module): # need specific train loop
 
         return h_t1
     
-    
-    
-    
     def _apply_mask(self, state_old, h_new, z_new, mask=None):
 
         if mask is not None:
@@ -247,7 +227,7 @@ class RSSM(nn.Module): # need specific train loop
         a_t = self.action_embed(action)
 
         # use flat version of z
-        z_t = self.compute_stochastic(state.z)
+        z_t = state.z
         
         # current memory state
         h_t = state.h
