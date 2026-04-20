@@ -54,9 +54,7 @@ def lambda_returns(rewards, values, continues, gamma=0.997, lam=0.95):
     assert values.shape[1] == rewards.shape[1] + 1, \
         f"Mismatch dimensionale: values {values.shape} deve essere T+1 rispetto a rewards {rewards.shape}"
     
-    # 2. Preparazione dei tensori
-    # Usiamo i valori futuri V(s_{t+1}) per il calcolo
-    next_values = values[:, 1:] 
+   
     
     # Il bootstrap è l'ultimo valore disponibile in values (V_T)
     # Inizializziamo l'accumulatore 'last_lambda_return' con questo bootstrap.
@@ -74,7 +72,8 @@ def lambda_returns(rewards, values, continues, gamma=0.997, lam=0.95):
     for t in reversed(range(num_steps)):
         r_t = rewards[:, t]
         c_t = continues[:, t]
-        v_next_t = next_values[:, t] # V(s_{t+1})
+
+        v_next_t = values[:, min(t+1, values.shape[1]-1)]
         
         # Calcolo del target per lo step t
         # (1 - lam) * v_next_t: Componente Value Function (Bias)
@@ -186,15 +185,13 @@ def twohot(x, B):
     idx = idx.clamp(0, num_buckets - 1 - 1e-5)
     
     # 4. Troviamo gli indici interi adiacenti (Lower e Upper)
-    lower = idx.floor().long()
-    upper = lower + 1
+    lower = idx.floor().long().clamp(0, num_buckets - 2)
+    upper = (lower + 1).clamp(0, num_buckets - 1)
     
-    # 5. Calcoliamo i pesi (interpolazione lineare)
-    # Se idx è 5.7 -> lower=5, upper=6.
-    # Peso su upper (6) = 0.7
-    # Peso su lower (5) = 1.0 - 0.7 = 0.3
-    upper_weight = idx - lower.float()
+    upper_weight = (idx - lower.float()).clamp(0.0, 1.0)
     lower_weight = 1.0 - upper_weight
+    
+  
     
     # 6. Creiamo il tensore di output vuoto
     # Shape: [Batch, T, Num_Buckets]

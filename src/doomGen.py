@@ -124,11 +124,10 @@ if __name__ == "__main__":
                 act_counter += 1
 
             # 2. Encoding Azione a_t
-            if not args.multibinary:
-                global_idx = DoomMap.reindex_categorical(local_buttons_name[action], DoomNames.buttons_names)
-                act_one_hot = DoomMap.one_hot(global_idx, n_classes=len(DoomNames.buttons_names))
-            else:
-                act_one_hot = action
+            
+            global_idx = DoomMap.reindex_categorical(local_buttons_name[action], DoomNames.buttons_names)
+            act_one_hot = DoomMap.one_hot(global_idx, n_classes=len(DoomNames.buttons_names))
+           
 
             act = OrderedDict()
             for n, v in zip(DoomNames.buttons_names, act_one_hot):

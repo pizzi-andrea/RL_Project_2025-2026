@@ -39,38 +39,25 @@ class DreamerGRUCell(nn.Module):
         nn.init.zeros_(self.recurrent_bias)
 
     def forward(self, x, h_prev):
-        # x: [B, input_size]
-        # h_prev: [B, hidden_size]
         B = x.shape[0]
-        
 
-        # Calcolo gate dall'input (Densa)
-        gates_x = self.input_to_gates(x) # [B, 3 * hidden_size]
-        x = self.layer_norm(gates_x)
-        #gates_x = self.layer_norm(x)
+        # Contributo input (senza bias, la norma ci pensa)
+        gates_x = self.input_to_gates(x)  # [B, 3*H]
 
-        # Calcolo gate ricorrenti (Block-Diagonal)
-        # Reshape h_prev per operazione a blocchi: [B, num_blocks, block_size]
-        h_reshape = h_prev.view(B, self.num_blocks, self.block_size).transpose(0, 1) # [num_blocks, B, block_size]
-        
-        # Batch Matrix Multiplication parallela sui blocchi
-        gates_h = torch.bmm(h_reshape, self.recurrent_weight) # [num_blocks, B, 3 * block_size]
-        gates_h = gates_h.transpose(0, 1).reshape(B, 3 * self.hidden_size) # [B, 3 * hidden_size]
+        # Contributo ricorrente block-diagonal
+        h_reshape = h_prev.view(B, self.num_blocks, self.block_size).transpose(0, 1)
+        gates_h = torch.bmm(h_reshape, self.recurrent_weight)
+        gates_h = gates_h.transpose(0, 1).reshape(B, 3 * self.hidden_size)
 
-        # Somma gate e bias
-        gates = gates_x + gates_h + self.recurrent_bias
-        
-        # Split gates: Reset (r), Update (z), New (n)
+        # Norma applicata DOPO la somma, prima delle attivazioni
+        gates = self.layer_norm(gates_x + gates_h) + self.recurrent_bias
+
         r, z, n = torch.split(gates, self.hidden_size, dim=-1)
-        
         r = torch.sigmoid(r)
         z = torch.sigmoid(z)
-        n = torch.tanh(n * r) # Reset gate applicato prima del tanh
-        
-        h_new = (1 - z) * n + z * h_prev
-        
-        
-        return h_new
+        n = torch.tanh(n * r)
+
+        return (1 - z) * n + z * h_prev
 
 # -------------------------
 # RSSM (discrete latent)
@@ -83,8 +70,8 @@ class DreamerGRUCell(nn.Module):
 @dataclass
 class RSSMState:
     h: torch.Tensor      # [B,H]
-    z: torch.Tensor      # [B, L*K] (flattened one-hot blocks)
-    z_logits: torch.Tensor  # [B, L, K] (posterior or prior logits)
+    z: torch.Tensor  # [B, L, K] (posterior or prior logits)
+   
 
 class RSSM(nn.Module): # need specific train loop
     """
@@ -128,7 +115,8 @@ class RSSM(nn.Module): # need specific train loop
         self.L = stoch_latents
         self.K = stoch_classes
         self.unimix = unimix
-        self.output_dimension = self.L*self.K
+        self.output_dimension = self.K * self.L
+        self.embed_dim = embed_dim
         #self.gru_input_proj_dim = gru_projection_dim
 
         self.action_embed = nn.Sequential(
@@ -141,14 +129,6 @@ class RSSM(nn.Module): # need specific train loop
             nn.RMSNorm(embed_dim),
             nn.SiLU()
         )
-
-        """self.gru_input_proj = nn.Sequential(
-            nn.Linear(2*embed_dim, gru_projection_dim),
-            nn.RMSNorm(gru_projection_dim), # 
-            nn.SiLU()
-        )"""
-
-        #self.gru = nn.GRUCell(input_size=2*embed_dim, hidden_size=deter_dim) #Batch, seq, feature
 
         self.h_proj = nn.Sequential(
             nn.Linear(deter_dim, embed_dim),
@@ -184,16 +164,27 @@ class RSSM(nn.Module): # need specific train loop
         """Inizialize RSSM memory and return the state"""
         device = device or next(self.parameters()).device
         h = torch.zeros(batch_size, self.deter_dim, device=device)
-        z_logits = torch.zeros(batch_size, self.L, self.K, device=device)
-        z = torch.zeros(batch_size, self.L * self.K, device=device)
-        return RSSMState(h=h, z=z, z_logits=z_logits)
+        z = torch.zeros(batch_size, self.L, self.K, device=device)
+      
+       
+        return RSSMState(h=h, z=z)
 
+    def compute_stochastic(self, z):
     
-    def _gru_step(self, h_t: torch.Tensor, z_t: torch.Tensor) -> torch.Tensor:
+        z_flat = torch.flatten(z, start_dim=1) # [B, 1024]
+        z_out = self.z_embed(z_flat)
+
+        return z_out 
+    def _gru_step(self, h_t: torch.Tensor, z_t: torch.Tensor, a_t:torch.Tensor = None) -> torch.Tensor:
         
-        h_mixed = self.h_proj(h_t) 
-        # Unione di latente, azione e mixing (3 * embed_dim = 768)
-        gru_input = torch.cat([z_t, h_mixed], dim=-1) 
+        h_mixed = self.h_proj(h_t)
+        z_flat  = self.compute_stochastic(z_t)
+
+        if a_t is not None:
+            z_flat = torch.cat([z_flat, a_t], dim=-1)
+        
+        
+        gru_input = torch.cat([z_flat, h_mixed], dim=-1) 
         h_t1 = self.gru_cell(gru_input, h_t)
 
         return h_t1
@@ -201,78 +192,96 @@ class RSSM(nn.Module): # need specific train loop
     
     
     
-    def _apply_mask(self, h_new, z_new, prior_logits, post_logits=None, mask=None):
-        """
-        Applica il masking allo stato RSSM e seleziona i logit corretti (Posterior se presente, altrimenti Prior).
-        """
-        # Se post_logits è None (es. in fase di immaginazione), usiamo il prior come riferimento per lo stato
-        effective_logits = post_logits if post_logits is not None else prior_logits
+    def _apply_mask(self, state_old, h_new, z_new, mask=None):
 
         if mask is not None:
-            # Espansione del mask per il broadcasting con h [B, H] e z [B, L*K]
-            m = mask.float().unsqueeze(-1)
-            # Espansione per i logit [B, L, K]
-            m3 = mask.float().view(-1, 1, 1)
-            
-            h = h_new * m
-            z = z_new * m
-            z_logits = effective_logits * m3
-            
-            state = RSSMState(h=h, z=z, z_logits=z_logits)
+            m  = mask.bool().unsqueeze(-1)   # [B,1]
+            m3 = mask.bool().view(-1,1,1)    # [B,1,1]
+
+            h = torch.where(m, h_new, state_old.h)
+
+            # structured state ONLY
+            z_struct = torch.where(m3, z_new, state_old.z)
+
+
         else:
-            state = RSSMState(h=h_new, z=z_new, z_logits=effective_logits)
-        
-        return state, prior_logits
-
-    def _compute_prior(self, h_t, z_t, a_t): # return h_t1, z_hat_t1_log
-        #x = self.gru_input_proj(x)
-        seq_t = torch.cat([z_t, a_t], dim=-1) # 2* embed_dim
-        h_t1 = self._gru_step(h_t, seq_t)
-        z_hat_t1_log = self.prior_net(h_t1).view(-1, self.L, self.K)
-
-        return h_t1, z_hat_t1_log
-
-    def _compute_posterior(self, h_t1, x_t1): # return z_t_log
-        posterior = torch.cat([h_t1, x_t1], dim=-1) # add observation
-        z_t1_log = self.post_net(posterior).view(-1, self.L, self.K)
-        
-        return z_t1_log
-
-    def imagine_step(self, state: RSSMState, action: torch.Tensor, mask_t: Optional[torch.Tensor]= None) -> Tuple[RSSMState, torch.Tensor]:
-        """Predict next state using the 'imagination' mechanism."""
-        
-        a_t = self.action_embed(action)
-        z_t = self.z_embed(state.z)
-        h_t = state.h
+            h = h_new
+            z_struct = z_new
        
-        h_t1, z_hat_t1_log = self._compute_prior(h_t, z_t, a_t)
-        # new sample from dist z_hat_t1
-        z_hat_t1 = logits2discrate(z_hat_t1_log, self.unimix)
-        return self._apply_mask(h_t1, z_hat_t1, z_hat_t1_log, mask=mask_t)
-    
+        return RSSMState(h=h, z=z_struct)
+
+   
 
     def observe_step(
         self,
         state: RSSMState,
         action_t: torch.Tensor,
-        x_t1: torch.Tensor, # t+1 !
+        x_t1: torch.Tensor,
         mask_t: Optional[torch.Tensor] = None,
     ) -> Tuple[RSSMState, torch.Tensor]:
-        """Predict next state from observation and return network state"""
-        
-        # -- convert in homogeneus latent spaces
-        a_t = self.action_embed(action_t)   # a_t
-        z_t = self.z_embed(state.z)         # z_t
-        h_t = state.h                       # h_t
-        # -- 
-        
-        #print(f"DEBUG: emb_action shape {emb_action.shape}, emb_latent shape {emb_latent.shape}")
-        #exit()
-        
-        h_t1, z_hat_t1_log = self._compute_prior(h_t, z_t, a_t)
-        z_t1_log = self._compute_posterior(h_t1, x_t1)
-        
-        # Unimix Dreamer V3
-        z_t1 = logits2discrate(z_t1_log)
 
-        return self._apply_mask(h_t1, z_t1, z_hat_t1_log, z_t1_log, mask_t)
+        a_t = self.action_embed(action_t)
+        z_t = state.z
+        h_t = state.h
+
+       
+        h_t1, z_hat_t1_log_prior = self._compute_prior(h_t, z_t, a_t)
+        z_hat_t1_log_posterior   = self._compute_posterior(h_t1, x_t1)
+
+        z_t1               = logits2discrate(z_hat_t1_log_posterior)
+        
+        #print(z_hat_t1_log_prior.shape)
+        #print(z_hat_t1_log_posterior.shape)
+        
+        return self._apply_mask(state, h_t1, z_t1, mask_t), z_hat_t1_log_prior, z_hat_t1_log_posterior
+                            
+
+
+    def imagine_step(
+        self,
+        state: RSSMState,
+        action: torch.Tensor,
+        mask_t: Optional[torch.Tensor] = None,
+    ) -> Tuple[RSSMState, torch.Tensor]:
+
+        a_t = self.action_embed(action)
+
+        # use flat version of z
+        z_t = self.compute_stochastic(state.z)
+        
+        # current memory state
+        h_t = state.h
+
+        # memory + action = new state s t+1
+        h_t1, z_hat_t1_log = self._compute_prior(h_t, z_t, a_t)
+
+        # encode raw z logits in one-hot categorical distribution
+        z_hat_t1           = logits2discrate(z_hat_t1_log, self.unimix)
+
+        return self._apply_mask(state, h_t1, z_hat_t1, mask=mask_t), z_hat_t1_log
+                        
+
+    def _compute_prior(self, h_t, z_t, a_t): # return h_t1, z_hat_t1_log
+        
+        B = z_t.shape[0]
+        # hidden state (t+1)
+        h_t1 = self._gru_step(h_t, z_t, a_t)
+        
+        # logits for stochastic state
+        z_hat_t1_log = self.prior_net(h_t1) # use only memory (prior knowledge)
+        z_hat_t1_log = z_hat_t1_log.reshape(B, self.L, self.K)
+        
+
+        return h_t1, z_hat_t1_log
+
+    def _compute_posterior(self, h_t1, x_t1): 
+        B = h_t1.shape[0]
+        # use memory + prior knowledge (obs, att etc...)
+        posterior = torch.cat([h_t1, x_t1], dim=-1)
+        # logits for stochastic state
+        z_hat_t1_log = self.post_net(posterior)
+        z_hat_t1_log = z_hat_t1_log.reshape(B, self.L, self.K)
+        
+        return z_hat_t1_log
+
+    

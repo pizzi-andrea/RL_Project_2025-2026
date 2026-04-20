@@ -62,8 +62,6 @@ class Actor(nn.Module):
         # --- ACTION ---
         if self.training:
             action = dist.sample()
-            
-
         else:
             index = probs.argmax(dim=-1, keepdim=True)
             action = torch.zeros_like(probs).scatter_(-1, index, 1.0)
