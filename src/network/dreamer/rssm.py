@@ -102,25 +102,16 @@ class RSSM(nn.Module): # need specific train loop
         self.embed_dim = embed_dim
         #self.gru_input_proj_dim = gru_projection_dim
 
-        self.action_embed = nn.Sequential(
-            nn.Linear(action_dim, embed_dim),
-            nn.RMSNorm(embed_dim),
-            nn.SiLU()
-        )
         self.z_embed = nn.Sequential(
             nn.Linear(self.output_dimension, embed_dim),
             nn.RMSNorm(embed_dim),
             nn.SiLU()
         )
 
-        self.h_proj = nn.Sequential(
-            nn.Linear(deter_dim, embed_dim),
-            nn.RMSNorm(embed_dim),
-            nn.SiLU()
-        )
+        
         self.block_size = deter_dim // self.num_gru_blocks
         
-        gru_input_size = 3 * embed_dim # z_emb + a_emb + h_mixed_proj
+        gru_input_size = self.action_dim + self.deter_dim + self.embed_dim # z_emb + a_emb + h_mixed_proj
         self.gru_cell = DreamerGRUCell(
             input_size=gru_input_size, 
             hidden_size=self.deter_dim,  
@@ -160,14 +151,14 @@ class RSSM(nn.Module): # need specific train loop
         return z_out 
     def _gru_step(self, h_t: torch.Tensor, z_t: torch.Tensor, a_t:torch.Tensor = None) -> torch.Tensor:
         
-        h_mixed = self.h_proj(h_t)
+        
         z_flat  = self.compute_stochastic(z_t)
 
         if a_t is not None:
             z_flat = torch.cat([z_flat, a_t], dim=-1)
         
         
-        gru_input = torch.cat([z_flat, h_mixed], dim=-1) 
+        gru_input = torch.cat([z_flat, h_t], dim=-1) 
         h_t1 = self.gru_cell(gru_input, h_t)
 
         return h_t1
@@ -200,7 +191,7 @@ class RSSM(nn.Module): # need specific train loop
         mask_t: Optional[torch.Tensor] = None,
     ) -> Tuple[RSSMState, torch.Tensor]:
 
-        a_t = self.action_embed(action_t)
+        a_t = action_t
         z_t = state.z
         h_t = state.h
 
@@ -224,7 +215,7 @@ class RSSM(nn.Module): # need specific train loop
         mask_t: Optional[torch.Tensor] = None,
     ) -> Tuple[RSSMState, torch.Tensor]:
 
-        a_t = self.action_embed(action)
+        a_t = action
 
         # use flat version of z
         z_t = state.z
