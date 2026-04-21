@@ -119,7 +119,7 @@ class DreamerAgent(L.LightningModule):
             
             lambda_return = lambda_returns(
                 rewards=r_hat,
-                values=v_hat_critic,
+                expected_values=v_hat_critic,
                 continues=c_hat
             )
 
@@ -265,6 +265,11 @@ class DreamerAgent(L.LightningModule):
 
         
         rssm_state, last_action = self._apply_episode_reset(rssm_state, last_action, is_first)
+        
+        z_flat = self.rssm.compute_stochastic(rssm_state.z).detach()
+        h = rssm_state.h.detach()
+
+        s = torch.cat([h, z_flat], dim=-1)
     
 
         for t in range(self.horizon):
@@ -282,11 +287,11 @@ class DreamerAgent(L.LightningModule):
 
             latent_states[:, t] = s
 
-            _, r_t = self.dreamer_model.predict_reward(s).detach()
-            c_t = self.dreamer_model.predict_continue(s).detach()
+            _, r_t = self.dreamer_model.predict_reward(s)
+            c_t = self.dreamer_model.predict_continue(s)
 
-            reward[:, t] = r_t
-            continues[:, t] = c_t
+            reward[:, t] = r_t.detach()
+            continues[:, t] = c_t.detach()
 
        
 

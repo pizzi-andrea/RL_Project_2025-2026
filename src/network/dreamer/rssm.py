@@ -98,12 +98,11 @@ class RSSM(nn.Module): # need specific train loop
         self.L = stoch_latents
         self.K = stoch_classes
         self.unimix = unimix
-        self.output_dimension = self.K * self.L
         self.embed_dim = embed_dim
         #self.gru_input_proj_dim = gru_projection_dim
 
         self.z_embed = nn.Sequential(
-            nn.Linear(self.output_dimension, embed_dim),
+            nn.Linear(self.K * self.L, embed_dim),
             nn.RMSNorm(embed_dim),
             nn.SiLU()
         )
@@ -123,7 +122,7 @@ class RSSM(nn.Module): # need specific train loop
             nn.Linear(deter_dim, embed_dim), 
             nn.RMSNorm(embed_dim),          
             nn.SiLU(),
-            nn.Linear(embed_dim, self.output_dimension) 
+            nn.Linear(embed_dim, self.K * self.L) 
         )
 
         # predict encoded rappresentation z_hat given only GRUcell hidden state 
@@ -131,7 +130,7 @@ class RSSM(nn.Module): # need specific train loop
             nn.Linear(deter_dim + obs_dim, embed_dim),
             nn.RMSNorm(embed_dim),
             nn.SiLU(),
-            nn.Linear(embed_dim, self.output_dimension)
+            nn.Linear(embed_dim, self.K * self.L)
         )
 
     def init_state(self, batch_size: int, device=None) -> RSSMState:

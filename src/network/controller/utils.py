@@ -39,20 +39,28 @@ def symexp(x):
 @torch.no_grad()
 def lambda_returns(rewards, expected_values, continues, gamma=0.997, lam=0.95):
     """
-    Tutti gli input devono essere scalari [B, T] nello spazio REALE.
+    Input shapes: [B, T]
+    Se la sequenza effettiva è 15, T sarà 16 (l'ultimo è il bootstrap).
     """
+    # Inizializziamo i return con la stessa forma
     returns = torch.zeros_like(expected_values)
-    # Il valore di bootstrap dell'ultimo step non deve essere perso
+    
+    # L'ultimo valore (T) è il nostro bootstrap iniziale
     last_ret = expected_values[:, -1]
     returns[:, -1] = last_ret 
     
-    for t in reversed(range(rewards.shape[1] - 1)):
-        # V_{t} = r_t + \gamma * c_t * [ (1-\lambda) V_{t+1} + \lambda R_{t+1} ]
-        ret = rewards[:, t] + gamma * continues[:, t] * ((1 - lam) * expected_values[:, t+1] + lam * last_ret)
-        returns[:, t] = ret
-        last_ret = ret
+    # Ciclo a ritroso partendo dal penultimo step (T-1) fino a 0
+    for t in reversed(range(expected_values.shape[1] - 1)):
+        # Formula corretta: 
+        # G_t = r_t + gamma * continue_t * [(1 - lambda) * V_{t+1} + lambda * G_{t+1}]
         
-    return returns
+        returns[:, t] = rewards[:, t] + gamma * continues[:, t] * (
+            (1 - lam) * expected_values[:, t + 1] + lam * last_ret
+        )
+        last_ret = returns[:, t]
+        
+    # Se vuoi solo i 15 step effettivi (escludendo il bootstrap finale usato per il calcolo)
+    return returns[:, :-1]
 
 
 def make_video(frames, output_path, fps=30):
@@ -138,6 +146,8 @@ def twohot(x, B):
         out: Distribuzione Two-Hot, shape [Batch, T, Num_Buckets]
     """
     # 1. Calcoliamo lo step dei bucket (assumendo linspace)
+    
+    x = symlog(x)
     min_b = B[0]
     max_b = B[-1]
     num_buckets = B.shape[0]

@@ -421,22 +421,18 @@ class CuriosityReplayPriority(PriorityExperienceReplay):
         self.last_updates = None
 
     def info(self):
-        """Debug info for monitoring Curiosity dynamics."""
         if self.last_updates is None:
-            print("not recent updates...")
+            print("No recent updates...")
             return 
         
-        tree_idxs = self.last_updates
         
-        max_idx = np.argmax(self.buffer.priority)
-        max_val = self.buffer.priority[max_idx]
-        max_cnt = self.count_buffer[max_idx]
+        tree_idxs = self.last_updates
+       
 
-        print(f"[Curiosity Replay] Alpha: {self.alpha:.2f}, Beta: {self.beta:.2f}, PMAX: {self.PMAX:.2f}")
-        print(f"Sample episodes (last): {self.last_updates}")
-        print(f"Sample Priorities (last): {self.buffer.priority[tree_idxs]}")
-        print(f"Sample Counts (last): {self.count_buffer[tree_idxs]}")
-        print(f"Max Priority: {max_val:.2f} (idx {max_idx}, count {max_cnt})")
+        print(f"[Curiosity Replay]  PMAX: {self.PMAX:.2f}")
+        print(f"Tree Indices (last batch): {tree_idxs - (self.buffer.size - 1)}")
+        print(f"Priorities (leaf values): {np.round(self.buffer.priority[tree_idxs], 2)}")
+        print(f"Sample Counts: {self.count_buffer[tree_idxs]}")
 
     
     

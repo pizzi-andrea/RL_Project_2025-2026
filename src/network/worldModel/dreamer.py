@@ -69,7 +69,7 @@ class Dreamer(L.LightningModule):
             unimix=unimix,
         )
 
-        self.state_dim = h_dim + (stoch_latents * stoch_classes) # h_dim + L*K
+        self.state_dim = h_dim + rssm_hidden_dim # h_dim + L*K
         self.internal_hidden_dim  = internal_hidden_dim
         self.burn_in = burn_in
         self.unimix = unimix
@@ -425,11 +425,12 @@ class Dreamer(L.LightningModule):
         # ── Allocazione buffer ─────────────────────────────────────────────
         h_dim = self.rssm.deter_dim
         L, K  = self.rssm.L, self.rssm.K
+        hidden_dim = self.rssm.embed_dim
 
         post_h       = torch.zeros(B, T, h_dim, device=device)
         post_logits  = torch.zeros(B, T, L, K,  device=device)
         prior_logits = torch.zeros(B, T, L, K,  device=device)
-        post_z       = torch.zeros(B, T, L * K, device=device)
+        post_z       = torch.zeros(B, T, hidden_dim, device=device)
 
 
         

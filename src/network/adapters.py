@@ -22,11 +22,7 @@ class PERAdapter(L.Callback):
         update_episodes, new_priority, count_sample = self.buffer_train.update(priority_idx=index, losses=loss)
         
         if batch_idx == 0:     
-            trainer.print("new priority...")
-            trainer.print(f"[PER Callback]:")
-            trainer.print(f"Sample episodes (last): {update_episodes}")
-            trainer.print(f"Sample Priorities (last): {new_priority}")
-            trainer.print(f"Sample Counts (last): {count_sample}")
+            self.buffer_train.info()
        
 
 
