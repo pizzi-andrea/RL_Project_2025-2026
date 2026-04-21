@@ -100,7 +100,7 @@ class Dreamer(L.LightningModule):
 
         # reward predictor
 
-        self.register_buffer("buckets_linear", torch.linspace(min_buckets, max_buckets, buckets))
+        
         self.register_buffer("buckets", torch.linspace(min_buckets, max_buckets, buckets))
         
         # reward network ############################################
@@ -167,7 +167,7 @@ class Dreamer(L.LightningModule):
         with torch.no_grad():
             user_att = symlog(user_att) # symlog target user attribute
             obs = obs / 255             # imgs normalization
-            two_hot_rewards = twohot(rewards, self.buckets_linear)  # robust encoding for high variance prediction (rewards model)
+            two_hot_rewards = twohot(rewards, self.buckets)  # robust encoding for high variance prediction (rewards model)
         ######################################################################################
 
         # recostruction world attribute loss
@@ -258,7 +258,7 @@ class Dreamer(L.LightningModule):
         pred_rewards_buckets_log = self.reward_head(feat)
         pred_rewards_buckets_probs = self.softmax(pred_rewards_buckets_log)
 
-        pred_rewards = (pred_rewards_buckets_probs * B).sum(dim=-1)
+        pred_rewards = symexp( (pred_rewards_buckets_probs * B).sum(dim=-1) )
         return pred_rewards_buckets_log, pred_rewards.squeeze(-1)
     
   

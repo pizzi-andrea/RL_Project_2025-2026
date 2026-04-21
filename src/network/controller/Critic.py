@@ -12,7 +12,7 @@ class Critic(nn.Module):
         self.min_buckets = min_buckets
         self.max_buckets = max_buckets
 
-        self.register_buffer("buckets", torch.linspace(min_buckets, max_buckets, num_buckets)) 
+        self.register_buffer("buckets", torch.linspace(min_buckets, max_buckets, num_buckets)  ) 
         
         self.l1 = nn.Sequential(
             nn.Linear(in_features=dim_state, out_features=hidden_dim),
@@ -41,7 +41,7 @@ class Critic(nn.Module):
         pred_values_prob = self.softmax(pred_values_log)
 
         # -- weighted mean
-        pred = (pred_values_prob * self.buckets).sum(dim=-1)
+        pred = symexp ( (pred_values_prob * self.buckets).sum(dim=-1) )
     
         return pred_values_log, pred
         

@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 
+from torch.distributions import OneHotCategoricalStraightThrough
 
 
 def unimix_probs(probs: torch.Tensor, unimix: float = 0.01) -> torch.Tensor: #uniform noise addition
@@ -10,17 +11,11 @@ def unimix_probs(probs: torch.Tensor, unimix: float = 0.01) -> torch.Tensor: #un
 
 def st_onehot(probs: torch.Tensor) -> torch.Tensor:
     """One-hot categorical distribution"""
-   
+    return OneHotCategoricalStraightThrough(probs).sample()
     
-    index = probs.argmax(dim=-1, keepdim=True)
-    hard_onehot = torch.zeros_like(probs).scatter_(-1, index, 1.0)
-    
-    # make differentiable 
-    return hard_onehot + probs - probs.detach() 
 
 
 def logits2discrate(logits: torch.Tensor, unimix=0.01):
-    
     
     # convert logits in categoric rappresentation
     probs = torch.softmax(logits, dim=-1)
