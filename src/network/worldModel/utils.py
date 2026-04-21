@@ -10,7 +10,7 @@ def select_data(tensor, is_first, burn_in, T_train):
                     out.append(tensor[b, start : start + T_train])
                 return torch.stack(out)
 
-def kl_logits(q_logits: torch.Tensor, p_logits: torch.Tensor, unimix: float = 0.01, free_nats:float=1.0) -> torch.Tensor:
+def kl_logits(q_logits: torch.Tensor, p_logits: torch.Tensor, unimix: float = 0.01) -> torch.Tensor:
     """
     KL(q || p) for categorical distribution with 1% Uniform Mixing.
     """
@@ -33,12 +33,11 @@ def kl_logits(q_logits: torch.Tensor, p_logits: torch.Tensor, unimix: float = 0.
 
     kl = (q_prob * (q_logprob - p_logprob)) # [B, T, C]
 
-    kl = kl.sum(dim=-1) 
+    kl = kl.sum(dim=-1)
     kl = kl.sum(dim=-1) 
 
    
-    if free_nats > 0:
-        kl = torch.maximum(kl, torch.tensor(free_nats, device=kl.device))
+    
     
     return  kl
 
@@ -90,7 +89,7 @@ def loss_prediction(x_hat, x, r_hat, r, c_hat, c, att_hat, att, mask=None,
     """
     # loss for observation (graphical)
     #x_hat = F.sigmoid(x_hat)
-    loss_x = F.binary_cross_entropy_with_logits(x_hat, x, reduction="none").mean(dim=(2,3,4))
+    loss_x = F.mse_loss(x_hat, x, reduction="none").sum(dim=(2,3,4))
     loss_c = F.binary_cross_entropy_with_logits(c_hat, c, reduction='none')
     # 2. Reward Loss  
 
@@ -124,14 +123,14 @@ def loss_prediction(x_hat, x, r_hat, r, c_hat, c, att_hat, att, mask=None,
     }
     return loss_total_bt, components # Shape [B, T]
 
-def loss_dynamic(q_log, p_log, mask=None, unimix:float=0.01, free_nats:float=1.0):
+def loss_dynamic(q_log, p_log, mask=None, unimix:float=0.01):
     """
     Compute loss value for dynamic model (prior)
     """
     q_log = q_log.detach() # Stop gradient sul posterior
 
   
-    kl_bt = kl_logits(q_log, p_log, unimix, free_nats) # [B,T]
+    kl_bt = kl_logits(q_log, p_log, unimix) # [B,T]
     
     if mask is not None:
         kl_bt = kl_bt * mask
@@ -149,13 +148,13 @@ def reward_loss(r_hat, r, mask=None):
     
     return per_step_loss
 
-def loss_representation(q_log, p_log, mask=None, unimix:float=0.01, free_nats:float=1.0):
+def loss_representation(q_log, p_log, mask=None, unimix:float=0.01):
     """
     (posterior)
     """
     p_log = p_log.detach()
 
-    kl_bt = kl_logits(q_log, p_log, unimix, free_nats)
+    kl_bt = kl_logits(q_log, p_log, unimix)
     
     if mask is not None:
         kl_bt = kl_bt * mask

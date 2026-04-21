@@ -190,11 +190,9 @@ class DreamerAgent(L.LightningModule):
         
         obs = outputs["imagination"]
         burn = outputs["burn"]
-        obs = torch.sigmoid(self.dreamer_model.predict_obs(obs))
-        #obs = self.dreamer_model.predict_obs(obs)
+        #obs = torch.sigmoid(self.dreamer_model.predict_obs(obs))
+        obs = self.dreamer_model.predict_obs(obs)
         burn = burn /255
-
-        #obs = torch.sigmoid(obs)
 
         if batch_idx == 0:
             

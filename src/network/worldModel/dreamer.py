@@ -183,9 +183,14 @@ class Dreamer(L.LightningModule):
         #######################################################################################
 
         # dynamic loss ########################################################################
-        l_dyn_bt  = loss_dynamic(q_logits, p_logits, unimix=self.unimix, mask=mask, free_nats=self.free_nats)
-        l_rep_bt  = loss_representation(q_logits, p_logits, mask=mask, unimix=self.unimix, free_nats=self.free_nats)
+        l_dyn_bt  = loss_dynamic(q_logits, p_logits, unimix=self.unimix, mask=mask)
+        l_rep_bt  = loss_representation(q_logits, p_logits, mask=mask, unimix=self.unimix)
         #######################################################################################
+
+        if self.free_nats > 0:
+            l_dyn_bt = torch.maximum(l_dyn_bt, torch.tensor(self.free_nats, device=l_dyn_bt.device))
+            l_rep_bt = torch.maximum(l_rep_bt, torch.tensor(self.free_nats, device=l_rep_bt.device))
+       
         
         
         
@@ -378,8 +383,8 @@ class Dreamer(L.LightningModule):
     @torch.no_grad()
     def on_train_batch_end(self, outputs, batch, batch_idx):
         
-        #x_hat = outputs["x_hat"] # [B, C, H, W]
-        x_hat = torch.sigmoid(outputs["x_hat"]) # [B, C, H, W]
+        x_hat = outputs["x_hat"] # [B, C, H, W]
+        #x_hat = torch.sigmoid(outputs["x_hat"]) # [B, C, H, W]
         x = outputs["x"] /255
         
         
