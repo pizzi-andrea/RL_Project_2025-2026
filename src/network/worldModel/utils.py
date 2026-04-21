@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 
+import torch.distributions as D
 def select_data(tensor, is_first, burn_in, T_train):
                 # Se is_first: prendi [0 : T_train]
                 # Se non is_first: prendi [burn_in : burn_in + T_train]
@@ -25,22 +26,14 @@ def kl_logits(q_logits: torch.Tensor, p_logits: torch.Tensor, unimix: float = 0.
         p_prob = (1.0 - unimix) * p_prob + (unimix / n_classes)
     
     # Compute log-probabilities from mixed probabilities
-    q_logprob = torch.log(q_prob)
-    p_logprob = torch.log(p_prob)
-    
-    # Standard KL calculation: sum(q * (log_q - log_p))
+    q = D.Independent(
+         D.OneHotCategorical(probs=q_prob), 1, True
+    )
+    p  = D.Independent(
+         D.OneHotCategorical(probs=p_prob), 1, True
+    )
 
-
-    kl = (q_prob * (q_logprob - p_logprob)) # [B, T, C]
-
-    kl = kl.sum(dim=-1) 
-    kl = kl.sum(dim=-1) 
-
-   
-    if free_nats > 0:
-        kl = torch.maximum(kl, torch.tensor(free_nats, device=kl.device))
-    
-    return  kl
+    return  D.kl_divergence(q, p)
 
 def last_valid_from_mask(x_bt: torch.Tensor, mask_bt: torch.Tensor) -> torch.Tensor:
     """
@@ -135,8 +128,6 @@ def loss_dynamic(q_log, p_log, mask=None, unimix:float=0.01, free_nats:float=1.0
     
     if mask is not None:
         kl_bt = kl_bt * mask
-
-    
         
     return kl_bt
 
