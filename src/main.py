@@ -185,7 +185,7 @@ def main():
                 alpha_obs           =   config["rssm_config"]["a_obs"],
                 alpha_att           =   config["rssm_config"]["a_att"],
                 alpha_reward        =   config["rssm_config"]["a_rew"],
-                aplha_continue      =   config["rssm_config"]["a_cont"],
+                alpha_continue      =   config["rssm_config"]["a_cont"],
 
                 #preprocess_callback=base_callback            
         )
@@ -213,7 +213,7 @@ def main():
                 alpha_obs           =   config["rssm_config"]["a_obs"],
                 alpha_att           =   config["rssm_config"]["a_att"],
                 alpha_reward        =   config["rssm_config"]["a_rew"],
-                aplha_continue      =   config["rssm_config"]["a_cont"],
+                alpha_continue      =   config["rssm_config"]["a_cont"],
                 
                 #preprocess_callback=base_callback
         ) 

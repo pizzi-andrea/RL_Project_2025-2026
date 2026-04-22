@@ -393,7 +393,7 @@ class CuriosityReplayPriority(PriorityExperienceReplay):
         # 3. Combine and Clip
         # Clipping is crucial to prevent a single outlier from ruining sampling distribution
         new_p = surprise * novelty_bonus
-        new_p = np.clip(new_p, 0.01, 100.0) 
+        #new_p = np.clip(new_p, 0.01, 100.0) 
 
         self.last_updates = priority_idx
 
@@ -411,7 +411,7 @@ class CuriosityReplayPriority(PriorityExperienceReplay):
 
        
 
-        return self.last_updates, self.buffer.priority[self.last_updates], self.count_buffer[self.last_updates], 
+        return self.last_updates, self.buffer.priority[self.last_updates], self.count_buffer[self.last_updates]
     
     def clear(self):
         super().clear()

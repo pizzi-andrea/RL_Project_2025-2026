@@ -5,7 +5,7 @@ PER_config:
 global_config:
   multi_cpu: 24
   max_episode_length: 500
-  warmup: 10
+  warmup: 100
   Project_logs: "Project"
   action_shape: 24
   att_shape: 7
@@ -13,7 +13,7 @@ global_config:
   img_channels: 3
   img_size_h : 64
   img_size_l : 64
-  dreamer_iterations: 100
+  dreamer_iterations: 1000
   dreamer_w: "weights/rssm/rssm.ckpt"
   policy_w : "weights/policy/policy.ckpt"
   chunk: 64
@@ -26,22 +26,22 @@ global_config:
     -  100
 
 vae_config:
-  latent_dim: 1024
-  model_dim: 64
+  latent_dim: 256
+  model_dim: 16
 
 curiosity_config:
-  alpha: 0.8
-  beta: 0.1
-  eps: 0.003
+  alpha: 0.85
+  beta: 0.6
+  eps: 0.000001
   p_max: 10
-  c: 0.1
+  c: 0.5
 
 rssm_config:
-  sample_episodes: 100
+  sample_episodes: 2000
   rssm_dataset_path_train: "Doom4RSSMs/train"
-  train_steps: 250
-  train_batch: 32 
-  burn_in: 15
+  train_steps: 800
+  train_batch: 64
+  burn_in: 30
   free_nats: 1.0
 
   min_buckets: -20
@@ -52,31 +52,33 @@ rssm_config:
   a_cont: 1.0
   a_rew: 1.0
 
-  detterministic_latent_dim: 1024 
-  rssm_latent_dim: 1024 
-  common_latent_dim: 1024
-  stochastic_latent: 32
-  stochastic_classes: 32
+  detterministic_latent_dim: 256 
+  rssm_latent_dim: 256 
+  common_latent_dim: 256
+  stochastic_latent: 16
+  stochastic_classes: 16
   batch_acc: 1
   buckets: 255
   unimix: 0.01
-  beta_dyn: 1.0
+  
+  beta_dyn: 0.1
   beta_pred: 1.0
-  beta_rep: 0.1
+  beta_rep: 1.0
+  
   lr: 0.0003
 policy_config:
-  sample_episodes: 200
-  train_steps: 500
+  sample_episodes: 2000
+  train_steps: 400
   buckets: 255
   horizon: 15
-  burn_in: 15
+  burn_in: 30
   lr: 0.0003
-  actor_entropy: 0.001  # aumentata da 0.00005
-  train_batch: 16
+  actor_entropy: 0.005  # aumentata da 0.00005
+  train_batch: 32
   batch_acc: 1
-  hidden_dim: 256
+  hidden_dim: 128
   unimix: 0.01
-  ema_decay: 0.99
+  ema_decay: 0.95
   ema_epsilon: 1.0
   min_buckets: -20
   max_buckets:  20

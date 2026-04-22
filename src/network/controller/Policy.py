@@ -199,7 +199,7 @@ class DreamerAgent(L.LightningModule):
             comparison = torch.cat([burn, obs])
             grid = torchvision.utils.make_grid(comparison, nrow=burn.shape[0])
             self.logger.experiment.add_image(
-                "imagination_reconstruction", grid, self.current_epoch
+                "imagination_reconstruction", grid, self.global_step
             )
     
     @torch.no_grad()
@@ -271,39 +271,25 @@ class DreamerAgent(L.LightningModule):
 
         s = torch.cat([h, z_flat], dim=-1)
     
-
         for t in range(self.horizon):
             act_t1, log_p, entropy = self.actor(s, mask_actions)
-
             actions_out[:, t] = act_t1
-            log_probs[:, t] = log_p
-            entropys[:, t] = entropy
+            log_probs[:, t]   = log_p
+            entropys[:, t]    = entropy
+            latent_states[:, t] = s              # ← z_t, allineato con log_p ✓
 
             rssm_state, _ = self.rssm.imagine_step(rssm_state, act_t1)
             z_flat = self.rssm.compute_stochastic(rssm_state.z).detach()
-            h = rssm_state.h.detach()
-
-            s = torch.cat([h, z_flat], dim=-1)
-
-            latent_states[:, t] = s
+            h      = rssm_state.h.detach()
+            s      = torch.cat([h, z_flat], dim=-1)  # s = z_{t+1}
 
             _, r_t = self.dreamer_model.predict_reward(s)
-            c_t = self.dreamer_model.predict_continue(s)
-
-            reward[:, t] = r_t.detach()
+            c_t    = self.dreamer_model.predict_continue(s)
+            reward[:, t]    = r_t.detach()
             continues[:, t] = c_t.detach()
 
-       
-
-        with torch.no_grad():
-            act_bootstrap, _, _ = self.actor(s, mask_actions)
-            rssm_bootstrap, _   = self.rssm.imagine_step(rssm_state, act_bootstrap)
-            z_bootstrap_flat = self.rssm.compute_stochastic(rssm_bootstrap.z)
-            s_bootstrap = torch.cat([rssm_bootstrap.h, z_bootstrap_flat], dim=-1)
-
-        latent_states = torch.cat(
-            [latent_states, s_bootstrap.unsqueeze(1)], dim=1
-        )
+        
+        latent_states = torch.cat([latent_states, s.unsqueeze(1)], dim=1)  # [B, H+1, emb]
 
         
 

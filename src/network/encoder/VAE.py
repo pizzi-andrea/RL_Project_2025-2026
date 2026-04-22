@@ -1,21 +1,21 @@
-import torch
 from torch import nn
 import lightning as L
+
 
 class VAE(L.LightningModule):
     def __init__(self, latent_dim: int, model_dim: int = 128, input_res=(64, 64)):
         super().__init__()
         self.save_hyperparameters()
-        
+
         d1 = max(1, model_dim // 4)
         d2 = max(1, model_dim // 2)
         d3 = model_dim
         d4 = model_dim * 2
-        
+
         self.last_h = input_res[0] // 16
         self.last_w = input_res[1] // 16
         flatten_dim = d4 * self.last_h * self.last_w
-        
+
         self.encoder_net = nn.Sequential(
             nn.Conv2d(3, d1, 4, stride=2, padding=1),
             nn.SiLU(),
@@ -25,11 +25,9 @@ class VAE(L.LightningModule):
             nn.SiLU(),
             nn.Conv2d(d3, d4, 4, stride=2, padding=1),
             nn.SiLU(),
-            nn.Flatten()
+            nn.Flatten(),
+            nn.Linear(flatten_dim, latent_dim),
         )
-
-        self.fc_mu = nn.Linear(flatten_dim, latent_dim)
-        self.fc_var = nn.Linear(flatten_dim, latent_dim)
 
         self.decoder_input = nn.Linear(latent_dim, flatten_dim)
 
@@ -41,24 +39,19 @@ class VAE(L.LightningModule):
             nn.ConvTranspose2d(d2, d1, 4, stride=2, padding=1),
             nn.SiLU(),
             nn.ConvTranspose2d(d1, 3, 4, stride=2, padding=1),
-           
         )
 
     def encode(self, x):
-        result = self.encoder_net(x)
-        return self.fc_mu(result), self.fc_var(result)
+        # x: [B, 3, H, W] → (embed: [B, latent_dim], None)
+        # Ritorna tupla per compatibilità con VAEEncoderAdapter (mean, _)
+        return self.encoder_net(x), None
 
     def decode(self, z):
+        # z: [B, latent_dim] → [B, 3, H, W] logits
         result = self.decoder_input(z)
         result = result.view(-1, self.hparams.model_dim * 2, self.last_h, self.last_w)
         return self.decoder_net(result)
 
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
-
     def forward(self, x):
-        mu, logvar = self.encode(x)
-        z = self.reparameterize(mu, logvar)
-        return self.decode(z), mu, logvar
+        embed, _ = self.encode(x)
+        return embed

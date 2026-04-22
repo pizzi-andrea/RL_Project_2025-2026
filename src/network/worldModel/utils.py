@@ -35,18 +35,6 @@ def kl_logits(q_logits: torch.Tensor, p_logits: torch.Tensor, unimix: float = 0.
 
     return  D.kl_divergence(q, p)
 
-def last_valid_from_mask(x_bt: torch.Tensor, mask_bt: torch.Tensor) -> torch.Tensor:
-    """
-    x_bt: [B,T]
-    mask_bt: [B,T] (1 valid, 0 padding)
-    return: [B] x at last valid timestep
-    """
-    B, T = x_bt.shape
-    lengths = mask_bt.sum(dim=1).long()                 # [B]
-    last_idx = (lengths - 1).clamp_min(0)               # [B]
-    ar = torch.arange(B, device=x_bt.device)
-    return x_bt[ar, last_idx]
-
 
 def symlog(x):
         return torch.sign(x) * torch.log(torch.abs(x) + 1.0)
@@ -76,6 +64,12 @@ def AGC(parameters, clip_factor=0.01, eps=1e-3):
         scaled_g = g_data * (max_norm / g_norm.clamp(min=1e-6))
         p.grad.data.copy_(torch.where(trigger, scaled_g, g_data))
 
+
+def image_loss(x_logits, x_target):
+    return F.mse_loss(x_logits, x_target, reduction='none') \
+             .sum(dim=[-3, -2, -1]) * 0.5
+
+
 def loss_prediction(x_hat, x, r_hat, r, c_hat, c, att_hat, att, mask=None, 
                     beta_x=1, beta_r=1.0, beta_c=1, beta_att=1):
     """
@@ -83,7 +77,7 @@ def loss_prediction(x_hat, x, r_hat, r, c_hat, c, att_hat, att, mask=None,
     """
     # loss for observation (graphical)
     #x_hat = F.sigmoid(x_hat)
-    loss_x = F.mse_loss(x_hat, x, reduction="none").sum(dim=(2,3,4))
+    loss_x = image_loss(x_hat, x)
     loss_c = F.binary_cross_entropy_with_logits(c_hat, c, reduction='none')
     # 2. Reward Loss  
 
@@ -177,39 +171,23 @@ def twohot(x, B):
     Returns:
         out: Distribuzione Two-Hot, shape [Batch, T, Num_Buckets]
     """
-    # 1. Calcoliamo lo step dei bucket (assumendo linspace)
+
     x = symlog(x)
     min_b = B[0]
     max_b = B[-1]
     num_buckets = B.shape[0]
     step = (max_b - min_b) / (num_buckets - 1)
 
-    # 2. Normalizziamo x nello spazio degli indici [0, Num_Buckets-1]
-    # Formula inversa di linspace: index = (value - min) / step
     idx = (x - min_b) / step
-    
-    # 3. Clampiamo gli indici per evitare errori fuori range
-    # Togliamo un epsilon (1e-5) per essere sicuri che l'indice massimo non sfori
-    #idx = idx.clamp(0, num_buckets - 1 - 1e-5)
     
     # 4. Troviamo gli indici interi adiacenti (Lower e Upper)
     lower = idx.floor().long()
     upper = lower + 1
     
-    # 5. Calcoliamo i pesi (interpolazione lineare)
-    # Se idx è 5.7 -> lower=5, upper=6.
-    # Peso su upper (6) = 0.7
-    # Peso su lower (5) = 1.0 - 0.7 = 0.3
     upper_weight = idx - lower.float()
     lower_weight = 1.0 - upper_weight
-    
-    # 6. Creiamo il tensore di output vuoto
-    # Shape: [Batch, T, Num_Buckets]
+ 
     out = torch.zeros(*x.shape, num_buckets, device=x.device)
-    
-    # 7. Distribuiamo i pesi (Scatter)
-    # Dobbiamo espandere l'ultima dimensione per fare matching con 'out' durante lo scatter
-    # lower.unsqueeze(-1) trasforma [B, T] in [B, T, 1]
     out.scatter_add_(-1, lower.unsqueeze(-1), lower_weight.unsqueeze(-1))
     out.scatter_add_(-1, upper.unsqueeze(-1), upper_weight.unsqueeze(-1))
     

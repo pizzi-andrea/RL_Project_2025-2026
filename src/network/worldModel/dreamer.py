@@ -40,7 +40,7 @@ class Dreamer(L.LightningModule):
         free_nats: float = 1.0,
         alpha_obs:float=1.0,
         alpha_att:float=1.0,
-        aplha_continue:float=1.0,
+        alpha_continue:float=1.0,
         alpha_reward:float=1.0,
         
         unimix: float = 0.01,
@@ -54,7 +54,7 @@ class Dreamer(L.LightningModule):
         self.free_nats = free_nats
         self.alpha_obs = alpha_obs
         self.alpha_att  = alpha_att
-        self.aplha_continue = aplha_continue
+        self.alpha_continue = alpha_continue
         self.alpha_reward = alpha_reward
 
         self.encoding_dim = 2*internal_hidden_dim
@@ -177,7 +177,7 @@ class Dreamer(L.LightningModule):
             cont_hat,     cont,
             user_att_hat, user_att, 
             mask=mask,
-            beta_x=self.alpha_obs, beta_att=self.alpha_att, beta_c=self.aplha_continue, beta_r=self.alpha_reward
+            beta_x=self.alpha_obs, beta_att=self.alpha_att, beta_c=self.alpha_continue, beta_r=self.alpha_reward
         )
         
         #######################################################################################
@@ -363,13 +363,11 @@ class Dreamer(L.LightningModule):
         # logging
         self.log_dict(components,    prog_bar=False, on_step=True, on_epoch=False)
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=False)
+        self.log("PER_weights", weights.detach().mean(), prog_bar=True, on_step=True, on_epoch=False)
+        self.log("train_loss(BIAS)", loss_batch.detach().mean(), prog_bar=True, on_step=True, on_epoch=False)
+        
 
-        #print(f"--- DEBUG STEP {self.global_step} ---")
-        #print(f"Obs Range: min={batch['obs'].min()}, max={batch['obs'].max()}")
-        #print(f"Weights Esempio (primi 5): {batch['weight'][:5]}")
-        #print(f"Mask Sum: {batch['mask'].sum().item()} / {batch['mask'].numel()}")
-        #print(f"Prediction Loss Raw: {components['prediction_loss']}")
-        # 4. Return per PER e Ottimizzatore
+        
 
         # ouput train step
         return {
@@ -391,7 +389,7 @@ class Dreamer(L.LightningModule):
         if batch_idx == 0: # use only first batch for logging
             x_log = torch.cat([x[:8], x_hat[:8]], dim=0)
             grid = torchvision.utils.make_grid(x_log[:16], nrow=8)
-            self.logger.experiment.add_image("reconstruction", grid, self.current_epoch)
+            self.logger.experiment.add_image("reconstruction", grid, self.global_step)
     
 
 
