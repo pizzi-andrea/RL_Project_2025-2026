@@ -125,6 +125,7 @@ def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, c
 
 def critic_loss(v_hat, target, continues):
     
+   
     log_probs = torch.nn.functional.log_softmax(v_hat, dim=-1)   
     
     per_step_loss = -(target * log_probs).sum(dim=-1)

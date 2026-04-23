@@ -66,8 +66,8 @@ def AGC(parameters, clip_factor=0.01, eps=1e-3):
 
 
 def image_loss(x_logits, x_target):
-    return F.mse_loss(x_logits, x_target, reduction='none') \
-             .sum(dim=[-3, -2, -1]) * 0.5
+    return F.binary_cross_entropy_with_logits(x_logits, x_target, reduction='none') \
+             .mean(dim=[-3, -2, -1])
 
 
 def loss_prediction(x_hat, x, r_hat, r, c_hat, c, att_hat, att, mask=None, 
@@ -156,7 +156,7 @@ def symlog_loss(pred_symlog, real_symlog, mask=None):
     return loss
 
 
-def symexp(x, mm=-20.0, mx=20.0):
+def symexp(x):
     #x = x.clamp(mm, mx)
     return torch.sign(x)*(torch.exp(torch.abs(x)) - 1)
 

@@ -1,5 +1,5 @@
 import torchvision
-from ..encoder.VAE import VAE
+from ..encoder.VAE import VAE, Decoder
 from typing import Dict
 from timm.optim.laprop import LaProp
 import torch
@@ -45,7 +45,8 @@ class Dreamer(L.LightningModule):
         
         unimix: float = 0.01,
        
-        vae: Optional[str]|VAE|None = None
+        vae: Optional[str]|VAE|None = None,
+        decoder: Optional[str]|Decoder|None = None
     ):
         super().__init__()
         self.save_hyperparameters(ignore=['vae'])
@@ -57,19 +58,22 @@ class Dreamer(L.LightningModule):
         self.alpha_continue = alpha_continue
         self.alpha_reward = alpha_reward
 
-        self.encoding_dim = 2*internal_hidden_dim
+        
         
         self.rssm = RSSM(
             action_dim=action_dim,
-            deter_dim=h_dim,
-            obs_dim=self.encoding_dim,
+            h_dim=h_dim,
+            obs_dim= internal_hidden_dim,
             stoch_latents=stoch_latents,
             stoch_classes=stoch_classes,
-            embed_dim=rssm_hidden_dim,
+            att_dim=att_dim,
+            hidden_dim=rssm_hidden_dim,
             unimix=unimix,
         )
 
-        self.state_dim = h_dim + rssm_hidden_dim # h_dim + L*K
+        self.encoding_dim = self.rssm.L * self.rssm.K 
+
+        self.state_dim = h_dim + self.rssm.z_dim  # h_dim + L*K
         self.internal_hidden_dim  = internal_hidden_dim
         self.burn_in = burn_in
         self.unimix = unimix
@@ -79,15 +83,26 @@ class Dreamer(L.LightningModule):
         elif isinstance(vae, VAE):
             self.vae = vae
         elif not vae:
-            self.vae = VAE(latent_dim=internal_hidden_dim)
+            self.vae = VAE(model_dim=self.internal_hidden_dim, latent_dim=internal_hidden_dim, rssm_state_dim=self.rssm.h_dim + self.rssm.z_dim)
         else:
             assert "No VAE instance"
 
+        
+        if isinstance(decoder, str):
+            self.decoder = Decoder.load_from_checkpoint(vae, map_location='cpu')
+        elif isinstance(decoder, Decoder):
+            self.decoder = decoder
+        elif not decoder:
+            self.decoder = Decoder(model_dim=self.internal_hidden_dim, world_model_dim=self.rssm.h_dim + self.rssm.z_dim, input_res=self.vae.input_res)
+        else:
+            assert "No VAE instance"
+
+        
         # -- VAE encoders adapter
-        self.encoder = VAEEncoderAdapter(self.vae, out_dim=internal_hidden_dim)
+        self.encoder = VAEEncoderAdapter(self.vae)
 
         # -- VAE decoder adapter
-        self.decoder = VAEDecoderAdapter(self.vae, feat_dim=self.state_dim, decode_shape=decode_shape)
+        self.decoder = VAEDecoderAdapter(self.decoder)
 
         self.att_encoder = nn.Sequential(
             nn.Linear(att_dim, out_features=internal_hidden_dim),
@@ -142,7 +157,7 @@ class Dreamer(L.LightningModule):
             nn.Linear(internal_hidden_dim, att_dim)
         )
     
-    def compute_loss(self, out, batch, free_n=0):
+    def compute_loss(self, out, batch):
 
         # unpack data
         mask = batch["mask"]
@@ -191,10 +206,6 @@ class Dreamer(L.LightningModule):
             l_dyn_bt = torch.maximum(l_dyn_bt, torch.tensor(self.free_nats, device=l_dyn_bt.device))
             l_rep_bt = torch.maximum(l_rep_bt, torch.tensor(self.free_nats, device=l_rep_bt.device))
        
-        
-        
-        
-
         # balance different loss ################################################################
         l_dyn_bt    = l_dyn_bt * self.hparams.beta_dyn
         l_rep_bt    = l_rep_bt * self.hparams.beta_rep
@@ -241,15 +252,15 @@ class Dreamer(L.LightningModule):
     def encode(self, obs, user_att): # x_t encoding
         """Encode observation + world attributes"""
         obs = obs / 255
-        user_att = symlog(user_att) # transform in symlog space
+        att_user = symlog(user_att) # transform in symlog space
         # singular encoders
-        enc = self.encoder(obs)
-        att_user = self.att_encoder(user_att)
+        x = self.encoder(obs)
+        #att_user = self.att_encoder(user_att)
         
         # -- fuse obs with user att, use simple cat fusion
-        enc = torch.cat([enc, att_user], dim=-1)
         
-        return enc
+        
+        return x, att_user
 
  
     def predict_reward(self, feat):
@@ -350,8 +361,7 @@ class Dreamer(L.LightningModule):
         
         loss_batch, components = self.compute_loss(
             out, 
-            train_data, 
-            free_n=self.free_nats
+            train_data
         )
 
         # add PER weights to remove sampling bias
@@ -381,8 +391,8 @@ class Dreamer(L.LightningModule):
     @torch.no_grad()
     def on_train_batch_end(self, outputs, batch, batch_idx):
         
-        x_hat = outputs["x_hat"] # [B, C, H, W]
-        #x_hat = torch.sigmoid(outputs["x_hat"]) # [B, C, H, W]
+        #x_hat = outputs["x_hat"] # [B, C, H, W]
+        x_hat = torch.sigmoid(outputs["x_hat"]) # [B, C, H, W]
         x = outputs["x"] /255
         
         
@@ -409,21 +419,23 @@ class Dreamer(L.LightningModule):
         last_action = torch.zeros_like(actions[:, 0])
         
 
-        # ── Reset + Burn-in ────────────────────────────────────────────────
         if burn_in_data is not None:
             with torch.no_grad():
                 for t in range(burn_in_data["obs"].shape[1]):
-                    x_t = self.encode(burn_in_data["obs"][:, t], burn_in_data["user_att"][:, t])
+                    x_t, att_t = self.encode(burn_in_data["obs"][:, t], burn_in_data["user_att"][:, t])
+                    
+                  
+                    
                     state, _, _ = self.rssm.observe_step(
-                        state, last_action, x_t, burn_in_data["mask"][:, t]
+                        state, last_action, x_t, att_t, burn_in_data["mask"][:, t]
                     )
                     last_action = burn_in_data["action"][:, t]
        
         state, last_action = self._apply_episode_reset(state, last_action, is_first)
         # ── Allocazione buffer ─────────────────────────────────────────────
-        h_dim = self.rssm.deter_dim
+        h_dim = self.rssm.h_dim
         L, K  = self.rssm.L, self.rssm.K
-        hidden_dim = self.rssm.embed_dim
+        hidden_dim = self.rssm.hidden_dim
 
         post_h       = torch.zeros(B, T, h_dim, device=device)
         post_logits  = torch.zeros(B, T, L, K,  device=device)
@@ -434,13 +446,13 @@ class Dreamer(L.LightningModule):
         
         # ── Loop principale ────────────────────────────────────────────────
         for t in range(T):
-            x_t = self.encode(obs[:, t], att_user[:, t])
-            state, prior_logits_t, post_logits_t = self.rssm.observe_step(state, last_action, x_t, mask[:, t])
+            x_t, att_t = self.encode(obs[:, t], att_user[:, t])
+            state, prior_logits_t, post_logits_t = self.rssm.observe_step(state, last_action, x_t, att_t, mask[:, t])
             
             post_h[:,  t]      = state.h
             post_z[:,  t]      = self.rssm.compute_stochastic(state.z)
-            post_logits[:,  t] = prior_logits_t
-            prior_logits[:, t] = post_logits_t
+            post_logits[:,  t] = post_logits_t   
+            prior_logits[:, t] = prior_logits_t  
 
             last_action = actions[:, t]
 

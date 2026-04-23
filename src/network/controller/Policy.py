@@ -50,6 +50,7 @@ class DreamerAgent(L.LightningModule):
 
         # -- define EMA scaler (Mobile mean)
         self.ema = EMAScalar(ema_decay, ema_epsilon)
+        
         self.emb_dim = self.dreamer_model.state_dim
         
         
@@ -130,15 +131,8 @@ class DreamerAgent(L.LightningModule):
         
         
         # -- evaluate critic respect lambda return in twohot encoding
-     
-        critic_l = critic_loss(
-            v_hat_log_critic[:, :-1],     # [B, H, buckets] ✓
-            two_hot_lambda_return,        # [B, H, buckets] ✓
-            discount_c
-        )
-
-       
         # actor loss: advantage = lambda_return - V(s_t), entrambi [B, H]
+        self.ema.train()
         actor_loss_v, ema_scale, advantage, _ = actor_loss(
             lambda_return,
             v_hat_critic[:, :-1].detach(),
@@ -148,6 +142,16 @@ class DreamerAgent(L.LightningModule):
             entropy_scale=self.entropy_coef,
             continues=discount_c
         )
+
+        
+        critic_l = critic_loss(
+            v_hat_log_critic[:, :-1],     # [B, H, buckets] ✓
+            two_hot_lambda_return,        # [B, H, buckets] ✓
+            discount_c
+        )
+
+       
+        
         
         critic_loss_v = critic_l 
 
@@ -190,8 +194,8 @@ class DreamerAgent(L.LightningModule):
         self.ema.eval()
         obs = outputs["imagination"]
         burn = outputs["burn"]
-        #obs = torch.sigmoid(self.dreamer_model.predict_obs(obs))
-        obs = self.dreamer_model.predict_obs(obs)
+        obs = torch.sigmoid(self.dreamer_model.predict_obs(obs))
+        #obs = self.dreamer_model.predict_obs(obs)
         burn = burn /255
 
         if batch_idx == 0:
@@ -206,9 +210,9 @@ class DreamerAgent(L.LightningModule):
     def act(self, obs, att_user, old_act, rssm_state, mask_actions=None):
         """Single step agent action"""
 
-        embed_input = self.dreamer_model.encode(obs, att_user)
+        embed_input, user_att = self.dreamer_model.encode(obs, att_user)
         
-        new_rssm_state, _, _ = self.rssm.observe_step(rssm_state, old_act, embed_input)
+        new_rssm_state, _, _ = self.rssm.observe_step(rssm_state, old_act, embed_input, user_att)
 
         z_flat = self.rssm.compute_stochastic(new_rssm_state.z)
         s = torch.cat([new_rssm_state.h, z_flat], dim=-1)
@@ -235,7 +239,7 @@ class DreamerAgent(L.LightningModule):
 
         B, T, _, _, _ = obs.shape
 
-        x = self.dreamer_model.encode(obs, user_att)
+        x, user_att = self.dreamer_model.encode(obs, user_att)
 
         if rssm_state is None:
             rssm_state = self.rssm.init_state(B, obs.device)
@@ -256,6 +260,7 @@ class DreamerAgent(L.LightningModule):
                     rssm_state,
                     last_action,
                     x[:, t],
+                    user_att[:, t],
                     mask[:, t]
                 )
                
@@ -270,23 +275,32 @@ class DreamerAgent(L.LightningModule):
         h = rssm_state.h.detach()
 
         s = torch.cat([h, z_flat], dim=-1)
-    
+        
         for t in range(self.horizon):
             act_t1, log_p, entropy = self.actor(s, mask_actions)
+            latent_states[:, t] = s
+            
+            _, r_t = self.dreamer_model.predict_reward(s)
+            c_t    = self.dreamer_model.predict_continue(s)
+            user_att = self.dreamer_model.predict_user_att(s).detach()
+            reward[:, t]    = r_t.detach()
+            continues[:, t] = c_t.detach()
+            #user_att[:, t]  = user_att
+
             actions_out[:, t] = act_t1
             log_probs[:, t]   = log_p
             entropys[:, t]    = entropy
-            latent_states[:, t] = s              # ← z_t, allineato con log_p ✓
+                        
 
-            rssm_state, _ = self.rssm.imagine_step(rssm_state, act_t1)
+            rssm_state, _ = self.rssm.imagine_step(rssm_state, act_t1, user_att)
+            
             z_flat = self.rssm.compute_stochastic(rssm_state.z).detach()
+            
             h      = rssm_state.h.detach()
             s      = torch.cat([h, z_flat], dim=-1)  # s = z_{t+1}
 
-            _, r_t = self.dreamer_model.predict_reward(s)
-            c_t    = self.dreamer_model.predict_continue(s)
-            reward[:, t]    = r_t.detach()
-            continues[:, t] = c_t.detach()
+            
+            
 
         
         latent_states = torch.cat([latent_states, s.unsqueeze(1)], dim=1)  # [B, H+1, emb]

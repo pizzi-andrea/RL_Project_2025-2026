@@ -16,48 +16,54 @@ import torch.nn as nn
 class DreamerGRUCell(nn.Module):
     def __init__(self, input_size, hidden_size, num_blocks=8):
         super().__init__()
+
+        assert hidden_size % num_blocks == 0
+
         self.hidden_size = hidden_size
         self.num_blocks = num_blocks
         self.block_size = hidden_size // num_blocks
-        
-        # 1. Proiezione dell'input verso tutti i gate di tutti i blocchi
-        # DreamerV3 usa una proiezione densa per l'input (zt, at, h_prev_mixed)
+
         self.input_to_gates = nn.Linear(input_size, 3 * hidden_size, bias=False)
-        
-        # 2. Matrice Ricorrente Block-Diagonal (Implementata come Linear "Grouped")
-        # Usiamo un tensore [num_blocks, block_size, 3 * block_size] per calcolare i gate ricorrenti in parallelo
-        self.recurrent_weight = nn.Parameter(torch.empty(num_blocks, self.block_size, 3 * self.block_size))
-        self.recurrent_bias = nn.Parameter(torch.empty(3 * hidden_size))
-        
-        # 3. RMSNorm per la stabilizzazione (Critica in DreamerV3)
-        self.layer_norm = nn.RMSNorm(3 * hidden_size)
-        
+
+        self.recurrent_weight = nn.Parameter(
+            torch.empty(num_blocks, self.block_size, 3 * self.block_size)
+        )
+
+        self.norm_r = nn.RMSNorm(hidden_size)
+        self.norm_z = nn.RMSNorm(hidden_size)
+        self.norm_n = nn.RMSNorm(hidden_size)
+
         self.reset_parameters()
 
     def reset_parameters(self):
-        nn.init.xavier_uniform_(self.recurrent_weight)
-        nn.init.zeros_(self.recurrent_bias)
+        for i in range(self.num_blocks):
+            nn.init.xavier_uniform_(self.recurrent_weight[i])
 
     def forward(self, x, h_prev):
         B = x.shape[0]
 
-        # Contributo input (senza bias, la norma ci pensa)
-        gates_x = self.input_to_gates(x)  # [B, 3*H]
+        # Input
+        gates_x = self.input_to_gates(x)  # [B, 3H]
+        x_r, x_z, x_n = torch.chunk(gates_x, 3, dim=-1)
 
-        # Contributo ricorrente block-diagonal
-        h_reshape = h_prev.view(B, self.num_blocks, self.block_size).transpose(0, 1)
-        gates_h = torch.bmm(h_reshape, self.recurrent_weight)
-        gates_h = gates_h.transpose(0, 1).reshape(B, 3 * self.hidden_size)
+        # Recurrent (block-diagonal)
+        h_blocks = h_prev.view(B, self.num_blocks, self.block_size).transpose(0, 1)
+        gates_h = torch.bmm(h_blocks, self.recurrent_weight)  # [num_blocks, B, 3*block]
 
-        # Norma applicata DOPO la somma, prima delle attivazioni
-        gates = self.layer_norm(gates_x + gates_h) + self.recurrent_bias
+        
+        h_r, h_z, h_n = torch.chunk(gates_h, 3, dim=2)
 
-        r, z, n = torch.split(gates, self.hidden_size, dim=-1)
-        r = torch.sigmoid(r)
-        z = torch.sigmoid(z)
-        n = torch.tanh(n * r)
+        h_r = h_r.transpose(0, 1).reshape(B, self.hidden_size)
+        h_z = h_z.transpose(0, 1).reshape(B, self.hidden_size)
+        h_n = h_n.transpose(0, 1).reshape(B, self.hidden_size)
 
-        return (1 - z) * n + z * h_prev
+        # GRU
+        r = torch.sigmoid(self.norm_r(x_r + h_r))
+        z = torch.sigmoid(self.norm_z(x_z + h_z))
+        n = torch.tanh(self.norm_n(x_n + r * h_n))
+
+        h = (1 - z) * n + z * h_prev
+        return h
 
 # -------------------------
 # RSSM (discrete latent)
@@ -80,11 +86,12 @@ class RSSM(nn.Module): # need specific train loop
         
         self,
         action_dim: int=16,
-        deter_dim: int = 1024, # deterministic hidden state dimension
+        h_dim: int = 1024, # deterministic hidden state dimension
         obs_dim:int = 1024,
         stoch_latents: int = 32,   # L (number of discrete latent variables)
         stoch_classes: int = 32,   # K (number of classes per latent variable)
-        embed_dim: int = 1024,
+        att_dim: int = 6,
+        hidden_dim: int = 1024,
         num_gru_blocks: int = 8,
         unimix: float = 0.01,
     ):
@@ -92,51 +99,65 @@ class RSSM(nn.Module): # need specific train loop
         Recurrent State Space Model (RSSM) that manages deterministic and stochastic state transitions.
         """
         super().__init__()
+        # num gru_cell blocks
         self.num_gru_blocks = num_gru_blocks
+        # action dim (num of actions)
         self.action_dim = action_dim
-        self.deter_dim = deter_dim
+        
+        # dimension of detterministic state (integer)
+        self.h_dim = h_dim
+        
+        # one-hot encoding dimensions (num classes- num latent for class)
         self.L = stoch_latents
         self.K = stoch_classes
+        
+        # unimix value
         self.unimix = unimix
-        self.embed_dim = embed_dim
-        #self.gru_input_proj_dim = gru_projection_dim
+        
+        # dimension of internal projection (integer)
+        self.hidden_dim = hidden_dim
+        
+        # attribute game (integer)
+        self.att_dim = att_dim
+        
 
         self.z_embed = nn.Sequential(
-            nn.Linear(self.K * self.L, embed_dim),
-            nn.RMSNorm(embed_dim),
+            nn.Linear(self.K * self.L, hidden_dim),
+            nn.RMSNorm(hidden_dim),
             nn.SiLU()
         )
 
+        self.z_dim = hidden_dim
+        self.block_size = h_dim // self.num_gru_blocks
+        self.gru_input_size = action_dim + att_dim + self.z_dim # z_emb + a_emb + h_mixed_proj
         
-        self.block_size = deter_dim // self.num_gru_blocks
-        
-        gru_input_size = self.action_dim + self.deter_dim + self.embed_dim # z_emb + a_emb + h_mixed_proj
+        print("expected GRU", self.gru_input_size)
         self.gru_cell = DreamerGRUCell(
-            input_size=gru_input_size, 
-            hidden_size=self.deter_dim,  
+            input_size=self.gru_input_size, 
+            hidden_size=self.h_dim,  
             num_blocks=self.num_gru_blocks
         )
         
         # predict encoded rappresentation z_hat given GRUcell hidden state and input rappresentation
         self.prior_net = nn.Sequential(
-            nn.Linear(deter_dim, embed_dim), 
-            nn.RMSNorm(embed_dim),          
+            nn.Linear(h_dim, hidden_dim), 
+            nn.RMSNorm(hidden_dim),          
             nn.SiLU(),
-            nn.Linear(embed_dim, self.K * self.L) 
+            nn.Linear(hidden_dim, self.K * self.L) 
         )
 
         # predict encoded rappresentation z_hat given only GRUcell hidden state 
         self.post_net = nn.Sequential(
-            nn.Linear(deter_dim + obs_dim, embed_dim),
-            nn.RMSNorm(embed_dim),
+            nn.Linear(h_dim + obs_dim, hidden_dim),
+            nn.RMSNorm(hidden_dim),
             nn.SiLU(),
-            nn.Linear(embed_dim, self.K * self.L)
+            nn.Linear(hidden_dim, self.K * self.L)
         )
 
     def init_state(self, batch_size: int, device=None) -> RSSMState:
         """Inizialize RSSM memory and return the state"""
         device = device or next(self.parameters()).device
-        h = torch.zeros(batch_size, self.deter_dim, device=device)
+        h = torch.zeros(batch_size, self.h_dim, device=device)
         z = torch.zeros(batch_size, self.L, self.K, device=device)
       
        
@@ -155,10 +176,11 @@ class RSSM(nn.Module): # need specific train loop
 
         if a_t is not None:
             z_flat = torch.cat([z_flat, a_t], dim=-1)
+
         
+        h_t1 = self.gru_cell(z_flat, h_t)
+
         
-        gru_input = torch.cat([z_flat, h_t], dim=-1) 
-        h_t1 = self.gru_cell(gru_input, h_t)
 
         return h_t1
     
@@ -187,13 +209,16 @@ class RSSM(nn.Module): # need specific train loop
         state: RSSMState,
         action_t: torch.Tensor,
         x_t1: torch.Tensor,
+        att_t: torch.Tensor,
         mask_t: Optional[torch.Tensor] = None,
     ) -> Tuple[RSSMState, torch.Tensor]:
 
-        a_t = action_t
+        a_t = torch.cat([action_t, att_t], dim=-1)
+        
         z_t = state.z
         h_t = state.h
 
+        
        
         h_t1, z_hat_t1_log_prior = self._compute_prior(h_t, z_t, a_t)
         z_hat_t1_log_posterior   = self._compute_posterior(h_t1, x_t1)
@@ -211,10 +236,11 @@ class RSSM(nn.Module): # need specific train loop
         self,
         state: RSSMState,
         action: torch.Tensor,
+        user_att:torch.Tensor,
         mask_t: Optional[torch.Tensor] = None,
     ) -> Tuple[RSSMState, torch.Tensor]:
 
-        a_t = action
+        a_t = torch.cat([action, user_att], dim=-1)
 
         # use flat version of z
         z_t = state.z
