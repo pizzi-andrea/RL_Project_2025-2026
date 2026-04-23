@@ -70,25 +70,13 @@ class EpisodicDoomDataset(Dataset):
     def __getitem__(self, index):
         episode_path_m = Path(self.episodes[index]).joinpath(self.csv_name)
         # get length of episode
-        total_frames = len(pd.read_csv(episode_path_m, usecols=[0]))
-        
-        # define chunck
+        metadata = pd.read_csv(episode_path_m)
+        total_frames = len(metadata)
+
         if total_frames > self.chunk_size:
             start = np.random.randint(0, total_frames - self.chunk_size)
-            # skiprows=0 è l'header, quindi saltiamo da 1 a start
-            skip = range(1, start + 1) 
-            n_rows = self.chunk_size
-        else:
-            skip = None
-            n_rows = total_frames
-
-        # read chunk metadata
-        metadata = pd.read_csv(
-            episode_path_m, 
-            skiprows=skip, 
-            nrows=n_rows
-        )
-       
+            metadata = metadata.iloc[start:start + self.chunk_size].reset_index(drop=True)
+            
         actions = metadata[self.action_name].to_numpy(dtype=np.uint8)
         att_player = metadata[self.att_name].to_numpy(dtype=np.uint8)
         is_first_val = (metadata["ids"].iloc[0] == 0)
@@ -155,7 +143,7 @@ def collate_fn(batch):
     batch_idx = torch.stack( [torch.as_tensor(b["priority_idx"],dtype=torch.uint32) for b in batch])
     batch_mask = torch.stack( [torch.as_tensor(b["mask_action"],dtype=torch.bool) for b in batch])
     batch_weight = torch.stack([torch.as_tensor(b["weight"],dtype=torch.float32) for b in batch])
-    batch_is_first = torch.stack([torch.as_tensor(b["is_first"],dtype=torch.bool) for b in batch])
+    batch_is_first = torch.stack([torch.as_tensor(bool(b["is_first"]),dtype=torch.bool) for b in batch])
     
  
     obs = pad_sequence(batch_obs, batch_first=True)

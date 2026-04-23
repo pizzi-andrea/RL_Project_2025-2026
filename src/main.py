@@ -122,7 +122,7 @@ def main():
     
     
     rssm_trainer = Trainer(
-        logger=TensorBoardLogger(log_experiment, name="RSSM"),
+        logger=TensorBoardLogger(log_experiment, name="RSSM_multicores"),
         callbacks=[PERAdapter(PER4train), StepLimitCallback(config["rssm_config"]["train_steps"]), RichProgressBar(leave=True)],
         max_epochs=-1,
         log_every_n_steps=1,
@@ -131,7 +131,7 @@ def main():
     )
 
     policy_trainer = Trainer(
-        logger=TensorBoardLogger(log_experiment, name="Policy"),
+        logger=TensorBoardLogger(log_experiment, name="Policy_multicores"),
         callbacks=[StepLimitCallback(config["policy_config"]["train_steps"]), RichProgressBar(leave=True)],
         max_epochs=-1,
         log_every_n_steps=1,
@@ -283,7 +283,8 @@ def main():
             shuffle=True, 
             collate_fn=collate_fn, 
             num_workers=config["global_config"]["multi_cpu"], 
-            pin_memory=True
+            pin_memory=True,
+            persistent_workers=True
         )
 
         rssm_trainer.fit(rssm_model, train_dataloaders=rssm_train_loader)
@@ -305,6 +306,7 @@ def main():
             collate_fn=collate_fn, 
             num_workers=config["global_config"]["multi_cpu"], 
             pin_memory=True,
+            persistent_workers=True
         )
         
         if (epoch > config["global_config"]["warmup"]):

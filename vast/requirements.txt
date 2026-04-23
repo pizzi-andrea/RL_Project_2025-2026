@@ -8,6 +8,7 @@ pyyaml
 # Plot / logging
 matplotlib
 seaborn
+setuptools<70
 tensorboard
 wandb
 
@@ -24,4 +25,4 @@ opencv-python
 
 # Utility
 gdown
-setuptools<70
+

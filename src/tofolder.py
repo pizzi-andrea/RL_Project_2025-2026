@@ -65,7 +65,7 @@ def dict2folder(episode:list[dict], out_dir:str|Path, button_encoder=None, att_p
         frame_path = obs_dir.joinpath(f"{idx}.png")
         Image.fromarray(episode[idx]["obs"]).save(frame_path)
         episode[idx].pop("obs")
-        episode[idx]["path_obs"] = str(frame_path)
+        episode[idx]["path_obs"] = str(frame_path.name)
 
     
         if button_encoder:
