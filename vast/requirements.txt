@@ -24,3 +24,4 @@ opencv-python
 
 # Utility
 gdown
+setuptools<70

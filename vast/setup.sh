@@ -15,8 +15,8 @@ $SUDO apt-get install -y --no-install-recommends \
   libsdl2-2.0-0 libsdl2-dev \
   libboost-all-dev \
   libopenal1 libopenal-dev \
-  ca-certificates
-
+  ca-certificates \
+  nano
 echo "[2/5] Fixing .sh line endings + permissions..."
 find .. -name "*.sh" -exec dos2unix {} \; || true
 find .. -name "*.sh" -exec chmod +x {} \; || true
