@@ -127,7 +127,7 @@ class DreamerXP_Trainer(Trainer):
                 # inizializza fuori dal while (vedi punto 3D)
                 while not done:
                     # 1) prepara input per agent: [B=1,T=1,...]
-                    s_t = torch.from_numpy(s).permute(2, 0, 1).float().div(255.0).to(self.agent.device)
+                    s_t = torch.from_numpy(s).permute(2, 0, 1).float().div(255.0).sub(0.5).to(self.agent.device)
                     s_t = s_t.unsqueeze(0).unsqueeze(0)  # [1,1,3,H,W]
 
                     a_t = torch.from_numpy(action_global).float().to(self.agent.device)

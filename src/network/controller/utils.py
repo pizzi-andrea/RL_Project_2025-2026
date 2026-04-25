@@ -65,7 +65,7 @@ def lambda_returns(rewards, expected_values, continues, gamma=0.997, lam=0.95):
 
 def make_video(frames, output_path, fps=30):
     frames = frames.cpu().detach()
-    frames_video = (sigmoid(frames)*255).to(dtype=torch.uint8)
+    frames_video = (frames*255 + 0.5).to(dtype=torch.uint8)
     frames_video = frames_video.permute(0,2,3,1).numpy()
     frames_video = frames_video[:, :, :, ::-1]
     num_frames, height, width, _ = frames_video.shape
@@ -148,7 +148,7 @@ def twohot(x, B):
     """
     # 1. Calcoliamo lo step dei bucket (assumendo linspace)
     
-    x = symlog(x)
+    #x = symlog(x)
     min_b = B[0]
     max_b = B[-1]
     num_buckets = B.shape[0]

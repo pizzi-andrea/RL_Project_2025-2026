@@ -29,8 +29,8 @@ class Critic(nn.Module):
         self.buckets_proj = nn.Linear(in_features=hidden_dim, out_features=num_buckets)
         self.softmax = nn.Softmax(-1)
 
-        nn.init.xavier_uniform_(self.buckets_proj.weight)
-        nn.init.zeros_(self.buckets_proj.bias) 
+        nn.init.zeros_(self.buckets_proj.weight)
+        nn.init.zeros_(self.buckets_proj.bias)
    
     
     def forward(self, x):

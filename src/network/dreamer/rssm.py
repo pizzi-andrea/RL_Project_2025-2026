@@ -119,10 +119,29 @@ class RSSM(nn.Module): # need specific train loop
         
         # attribute game (integer)
         self.att_dim = att_dim
+
+        self.action_proj = nn.Sequential(
+            nn.Linear(in_features=action_dim, out_features=hidden_dim),
+            nn.RMSNorm(hidden_dim),
+            nn.SiLU()
+        )
+
+        self.attribute_proj = nn.Sequential(
+            nn.Linear(in_features=att_dim, out_features=hidden_dim),
+            nn.RMSNorm(hidden_dim),
+            nn.SiLU()
+
+        )
         
 
         self.z_embed = nn.Sequential(
             nn.Linear(self.K * self.L, hidden_dim),
+            nn.RMSNorm(hidden_dim),
+            nn.SiLU()
+        )
+
+        self.gru_proj = nn.Sequential(
+            nn.Linear(in_features=3*hidden_dim, out_features=hidden_dim),
             nn.RMSNorm(hidden_dim),
             nn.SiLU()
         )
@@ -133,7 +152,7 @@ class RSSM(nn.Module): # need specific train loop
         
         print("expected GRU", self.gru_input_size)
         self.gru_cell = DreamerGRUCell(
-            input_size=self.gru_input_size, 
+            input_size=hidden_dim, 
             hidden_size=self.h_dim,  
             num_blocks=self.num_gru_blocks
         )
@@ -143,12 +162,18 @@ class RSSM(nn.Module): # need specific train loop
             nn.Linear(h_dim, hidden_dim), 
             nn.RMSNorm(hidden_dim),          
             nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim), 
+            nn.RMSNorm(hidden_dim),          
+            nn.SiLU(),
             nn.Linear(hidden_dim, self.K * self.L) 
         )
 
         # predict encoded rappresentation z_hat given only GRUcell hidden state 
         self.post_net = nn.Sequential(
             nn.Linear(h_dim + obs_dim, hidden_dim),
+            nn.RMSNorm(hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.RMSNorm(hidden_dim),
             nn.SiLU(),
             nn.Linear(hidden_dim, self.K * self.L)
@@ -176,6 +201,8 @@ class RSSM(nn.Module): # need specific train loop
 
         if a_t is not None:
             z_flat = torch.cat([z_flat, a_t], dim=-1)
+
+        z_flat = self.gru_proj(z_flat)
 
         
         h_t1 = self.gru_cell(z_flat, h_t)
@@ -213,6 +240,9 @@ class RSSM(nn.Module): # need specific train loop
         mask_t: Optional[torch.Tensor] = None,
     ) -> Tuple[RSSMState, torch.Tensor]:
 
+        action_t = self.action_proj(action_t)
+        att_t = self.attribute_proj(att_t)
+
         a_t = torch.cat([action_t, att_t], dim=-1)
         
         z_t = state.z
@@ -230,7 +260,7 @@ class RSSM(nn.Module): # need specific train loop
         
         return self._apply_mask(state, h_t1, z_t1, mask_t), z_hat_t1_log_prior, z_hat_t1_log_posterior
                             
-
+    
 
     def imagine_step(
         self,
@@ -239,7 +269,10 @@ class RSSM(nn.Module): # need specific train loop
         user_att:torch.Tensor,
         mask_t: Optional[torch.Tensor] = None,
     ) -> Tuple[RSSMState, torch.Tensor]:
-
+        
+        action = self.action_proj(action)
+        user_att = self.attribute_proj(user_att)
+        
         a_t = torch.cat([action, user_att], dim=-1)
 
         # use flat version of z

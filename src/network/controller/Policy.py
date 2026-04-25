@@ -57,7 +57,12 @@ class DreamerAgent(L.LightningModule):
         # -- Define Actor-critic Structure
         self.actor = Actor(dim_state=self.emb_dim, num_dist=action_space_dim, unimix=unimix, hidden_dim=hidden_dim)
         self.critic = Critic(dim_state=self.emb_dim, num_buckets=buckets, min_buckets=min_buckets, max_buckets=max_buckets, hidden_dim=hidden_dim)
-        
+        self.target = copy.deepcopy(self.critic)
+    
+    def update_target(self):
+        with torch.no_grad():
+            for p, p_target in zip(self.critic.parameters(), self.target.parameters()):
+                p_target.data.mul_(0.98).add_(0.02 * p.data)
 
     def configure_optimizers(self):
         params = list(self.actor.parameters()) + list(self.critic.parameters())
@@ -107,7 +112,7 @@ class DreamerAgent(L.LightningModule):
         
         with torch.no_grad():
             # -- target: copy of critic network use how target network to stabilize the traning
-           
+            v_hat_log_target, v_hat_target = self.target(states_hat)
             
            
             discount_c = torch.cumprod(
@@ -120,12 +125,12 @@ class DreamerAgent(L.LightningModule):
             
             lambda_return = lambda_returns(
                 rewards=r_hat,
-                expected_values=v_hat_critic,
+                expected_values=v_hat_target,
                 continues=c_hat
             )
 
          
-            two_hot_lambda_return= twohot(lambda_return, self.critic.buckets) 
+            two_hot_lambda_return= twohot(symlog(lambda_return), self.critic.buckets) 
           
         ###################################################################################
         
@@ -193,17 +198,27 @@ class DreamerAgent(L.LightningModule):
     def on_train_batch_end(self, outputs, batch, batch_idx):
         self.ema.eval()
         obs = outputs["imagination"]
-        burn = outputs["burn"]
-        obs = torch.sigmoid(self.dreamer_model.predict_obs(obs))
-        #obs = self.dreamer_model.predict_obs(obs)
-        burn = burn /255
+        real = outputs["burn"]
+        self.update_target()
+        #obs = torch.sigmoid(self.dreamer_model.predict_obs(obs))
+        obs = self.dreamer_model.predict_obs(obs) + 0.5
+        obs = torch.clamp(obs, 0, 1)
+        real = (real /255)
 
+        burning = real[:self.burn_in]
+        end_frame = torch.zeros_like(burning[0]).unsqueeze(0)
         if batch_idx == 0:
             
-            comparison = torch.cat([burn, obs])
-            grid = torchvision.utils.make_grid(comparison, nrow=burn.shape[0])
+            comparison = torch.cat([burning, end_frame, obs], dim=0)
+            
+            grid = torchvision.utils.make_grid(
+                comparison, 
+                nrow=comparison.shape[0],
+                normalize=True, 
+                value_range=(-0.5, 0.5) # Forza il riferimento fisso
+                )
             self.logger.experiment.add_image(
-                "imagination_reconstruction", grid, self.global_step
+                "imagination", grid, self.global_step
             )
     
     @torch.no_grad()
@@ -215,7 +230,7 @@ class DreamerAgent(L.LightningModule):
         new_rssm_state, _, _ = self.rssm.observe_step(rssm_state, old_act, embed_input, user_att)
 
         z_flat = self.rssm.compute_stochastic(new_rssm_state.z)
-        s = torch.cat([new_rssm_state.h, z_flat], dim=-1)
+        s = self.dreamer_model.encode_state(new_rssm_state.h, z_flat)
         
         
         action, _, _ = self.actor(s, mask_actions)
@@ -274,7 +289,7 @@ class DreamerAgent(L.LightningModule):
         z_flat = self.rssm.compute_stochastic(rssm_state.z).detach()
         h = rssm_state.h.detach()
 
-        s = torch.cat([h, z_flat], dim=-1)
+        s = self.dreamer_model.encode_state(h, z_flat)
         
         for t in range(self.horizon):
             act_t1, log_p, entropy = self.actor(s, mask_actions)
@@ -297,7 +312,7 @@ class DreamerAgent(L.LightningModule):
             z_flat = self.rssm.compute_stochastic(rssm_state.z).detach()
             
             h      = rssm_state.h.detach()
-            s      = torch.cat([h, z_flat], dim=-1)  # s = z_{t+1}
+            s      = self.dreamer_model.encode_state(h, z_flat).detach()  # s = z_{t+1}
 
             
             

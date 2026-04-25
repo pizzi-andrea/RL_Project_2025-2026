@@ -97,10 +97,8 @@ def main():
 
 ############################################################
         x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
-        x = x.float().div_(255.0).detach()
+        x = (x.float().div_(255.0).sub_(0.5).detach())
         return x
-    
-
   
     image_processor = simple_preprocessor
     log_experiment = Path(config["global_config"]["Project_logs"])
@@ -137,9 +135,6 @@ def main():
         log_every_n_steps=1,
         accumulate_grad_batches=config["policy_config"]["batch_acc"],
         precision=config["global_config"]["precision"],
-        gradient_clip_val=100.0,
-        gradient_clip_algorithm="norm"
-        
     )
     
     #if args.load_weights and Path(config["global_config"]["vae_w"]).exists():

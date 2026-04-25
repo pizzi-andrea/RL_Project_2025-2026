@@ -66,8 +66,8 @@ def AGC(parameters, clip_factor=0.01, eps=1e-3):
 
 
 def image_loss(x_logits, x_target):
-    return F.binary_cross_entropy_with_logits(x_logits, x_target, reduction='none') \
-             .mean(dim=[-3, -2, -1])
+    return F.mse_loss(x_logits, x_target, reduction='none') \
+             .sum(dim=[-3, -2, -1]) * 0.5
 
 
 def loss_prediction(x_hat, x, r_hat, r, c_hat, c, att_hat, att, mask=None, 
@@ -163,31 +163,46 @@ def symexp(x):
 @torch.no_grad()
 def twohot(x, B):
     """
-    Robust twohot encoding
+    Codifica Two-Hot robusta per bucket equidistanti.
     
     Args:
-        x: uncoded input
+        x: Target scalari (symlog), shape [Batch, T]
         B: Centri dei bucket, shape [Num_Buckets] (assunto linspace ordinato)
     Returns:
         out: Distribuzione Two-Hot, shape [Batch, T, Num_Buckets]
     """
-
-    x = symlog(x)
+    # 1. Calcoliamo lo step dei bucket (assumendo linspace)
+    
+    #x = symlog(x)
     min_b = B[0]
     max_b = B[-1]
     num_buckets = B.shape[0]
     step = (max_b - min_b) / (num_buckets - 1)
 
+    # 2. Normalizziamo x nello spazio degli indici [0, Num_Buckets-1]
+    # Formula inversa di linspace: index = (value - min) / step
     idx = (x - min_b) / step
     
-    # 4. Troviamo gli indici interi adiacenti (Lower e Upper)
-    lower = idx.floor().long()
-    upper = lower + 1
+    # 3. Clampiamo gli indici per evitare errori fuori range
+    # Togliamo un epsilon (1e-5) per essere sicuri che l'indice massimo non sfori
+    idx = idx.clamp(0, num_buckets - 1 - 1e-5)
     
-    upper_weight = idx - lower.float()
+    # 4. Troviamo gli indici interi adiacenti (Lower e Upper)
+    lower = idx.floor().long().clamp(0, num_buckets - 2)
+    upper = (lower + 1).clamp(0, num_buckets - 1)
+    
+    upper_weight = (idx - lower.float()).clamp(0.0, 1.0)
     lower_weight = 1.0 - upper_weight
- 
+    
+  
+    
+    # 6. Creiamo il tensore di output vuoto
+    # Shape: [Batch, T, Num_Buckets]
     out = torch.zeros(*x.shape, num_buckets, device=x.device)
+    
+    # 7. Distribuiamo i pesi (Scatter)
+    # Dobbiamo espandere l'ultima dimensione per fare matching con 'out' durante lo scatter
+    # lower.unsqueeze(-1) trasforma [B, T] in [B, T, 1]
     out.scatter_add_(-1, lower.unsqueeze(-1), lower_weight.unsqueeze(-1))
     out.scatter_add_(-1, upper.unsqueeze(-1), upper_weight.unsqueeze(-1))
     

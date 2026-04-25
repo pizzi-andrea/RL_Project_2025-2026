@@ -73,7 +73,7 @@ class Dreamer(L.LightningModule):
 
         self.encoding_dim = self.rssm.L * self.rssm.K 
 
-        self.state_dim = h_dim + self.rssm.z_dim  # h_dim + L*K
+        self.state_dim = self.rssm.hidden_dim  # h_dim + L*K
         self.internal_hidden_dim  = internal_hidden_dim
         self.burn_in = burn_in
         self.unimix = unimix
@@ -83,7 +83,7 @@ class Dreamer(L.LightningModule):
         elif isinstance(vae, VAE):
             self.vae = vae
         elif not vae:
-            self.vae = VAE(model_dim=self.internal_hidden_dim, latent_dim=internal_hidden_dim, rssm_state_dim=self.rssm.h_dim + self.rssm.z_dim)
+            self.vae = VAE(model_dim=self.internal_hidden_dim, latent_dim=internal_hidden_dim, rssm_state_dim=self.rssm.hidden_dim)
         else:
             assert "No VAE instance"
 
@@ -93,7 +93,7 @@ class Dreamer(L.LightningModule):
         elif isinstance(decoder, Decoder):
             self.decoder = decoder
         elif not decoder:
-            self.decoder = Decoder(model_dim=self.internal_hidden_dim, world_model_dim=self.rssm.h_dim + self.rssm.z_dim, input_res=self.vae.input_res)
+            self.decoder = Decoder(model_dim=self.internal_hidden_dim, world_model_dim=self.rssm.hidden_dim, input_res=self.vae.input_res)
         else:
             assert "No VAE instance"
 
@@ -114,6 +114,8 @@ class Dreamer(L.LightningModule):
         # -- controllers
 
         # reward predictor
+
+
 
         
         self.register_buffer("buckets", torch.linspace(min_buckets, max_buckets, buckets))
@@ -156,6 +158,15 @@ class Dreamer(L.LightningModule):
             
             nn.Linear(internal_hidden_dim, att_dim)
         )
+
+        self.state_encoder = nn.Sequential(
+            nn.Linear(in_features=self.rssm.h_dim + self.rssm.hidden_dim, out_features=internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim),
+            nn.SiLU()
+        )
+
+        nn.init.zeros_(self.reward_head[-1].weight)
+        nn.init.zeros_(self.reward_head[-1].bias)
     
     def compute_loss(self, out, batch):
 
@@ -181,8 +192,9 @@ class Dreamer(L.LightningModule):
         
         with torch.no_grad():
             user_att = symlog(user_att) # symlog target user attribute
-            obs = obs / 255             # imgs normalization
-            two_hot_rewards = twohot(rewards, self.buckets)  # robust encoding for high variance prediction (rewards model)
+            obs = (obs / 255) - 0.5             # imgs normalization
+            
+            two_hot_rewards = twohot(symlog(rewards), self.buckets)  # robust encoding for high variance prediction (rewards model)
         ######################################################################################
 
         # recostruction world attribute loss
@@ -251,7 +263,7 @@ class Dreamer(L.LightningModule):
     
     def encode(self, obs, user_att): # x_t encoding
         """Encode observation + world attributes"""
-        obs = obs / 255
+        obs = (obs / 255) - 0.5
         att_user = symlog(user_att) # transform in symlog space
         # singular encoders
         x = self.encoder(obs)
@@ -261,6 +273,10 @@ class Dreamer(L.LightningModule):
         
         
         return x, att_user
+
+    def encode_state(self, h, z):
+        x = torch.cat([h, z], dim=-1)
+        return self.state_encoder(x)
 
  
     def predict_reward(self, feat):
@@ -391,9 +407,9 @@ class Dreamer(L.LightningModule):
     @torch.no_grad()
     def on_train_batch_end(self, outputs, batch, batch_idx):
         
-        #x_hat = outputs["x_hat"] # [B, C, H, W]
-        x_hat = torch.sigmoid(outputs["x_hat"]) # [B, C, H, W]
-        x = outputs["x"] /255
+        x_hat = outputs["x_hat"] + 0.5 # [B, C, H, W]
+        #x_hat = torch.sigmoid(outputs["x_hat"]) # [B, C, H, W]
+        x = (outputs["x"] /255)
         
         
         if batch_idx == 0: # use only first batch for logging
@@ -456,9 +472,9 @@ class Dreamer(L.LightningModule):
 
             last_action = actions[:, t]
 
-        # ── Decodifica ─────────────────────────────────────────────────────
-       
-        s_t = torch.cat([post_h, post_z], dim=-1)
+
+        # encode memory and stochastic    
+        s_t = self.encode_state(post_h, post_z) 
 
         
         # predict world attributes ####################################################
