@@ -14,11 +14,17 @@ class Actor(nn.Module):
         
         # -- actor network layers
         self.l1 = nn.Sequential(
-            nn.Linear(in_features=dim_state, out_features=hidden_dim),
-            nn.RMSNorm(hidden_dim),
+            nn.Linear(in_features=dim_state, out_features=hidden_dim*2),
+            nn.RMSNorm(hidden_dim*2),
             nn.SiLU(),
         )
         self.l2 = nn.Sequential(
+            nn.Linear(in_features=hidden_dim*2, out_features=hidden_dim),
+            nn.RMSNorm(hidden_dim),
+            nn.SiLU(),
+        )
+
+        self.l3 = nn.Sequential(
             nn.Linear(in_features=hidden_dim, out_features=hidden_dim),
             nn.RMSNorm(hidden_dim),
             nn.SiLU(),
@@ -34,6 +40,7 @@ class Actor(nn.Module):
     def forward(self, x, valid_actions_mask=None):
         x = self.l1(x)
         x = self.l2(x)
+        x = self.l3(x)
         logits = self.dist_pred(x)
 
         # --- MASK ---

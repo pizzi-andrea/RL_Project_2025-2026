@@ -97,7 +97,7 @@ def main():
 
 ############################################################
         x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
-        x = (x.float().div_(255.0).sub_(0.5).detach())
+        x = (x.float().div_(255.0).detach())
         return x
   
     image_processor = simple_preprocessor

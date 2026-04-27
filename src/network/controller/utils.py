@@ -8,22 +8,27 @@ class EMAScalar(nn.Module):
         self.decay = decay
         self.eps = eps
         self.register_buffer("scale", torch.tensor(1.0))
+        self.register_buffer("_initialized", torch.tensor(False))
 
-    def forward(self, values):
+    def forward(self, values, mask=None):
         values = values.detach()
-        if not self.training:
-            return self.scale
         
-    
+        if not self.training:
+            return self.scale.detach()
+
         with torch.no_grad():
-            per_95 = torch.quantile(values, 0.95)
-            per_05 = torch.quantile(values, 0.05)
+            flat = values[mask.bool()] if mask is not None else values.flatten()
+            per_95 = torch.quantile(flat, 0.95)
+            per_05 = torch.quantile(flat, 0.05)
             range_val = (per_95 - per_05).clamp_min(self.eps)
 
-            self.scale.mul_(self.decay).add_((1 - self.decay) * range_val)
-          
+            if not self._initialized:
+                self.scale.copy_(range_val)
+                self._initialized.fill_(True)
+            else:
+                self.scale.mul_(self.decay).add_((1 - self.decay) * range_val)
 
-        return self.scale
+        return self.scale.detach()
 
 
 def symlog(x):
@@ -65,7 +70,7 @@ def lambda_returns(rewards, expected_values, continues, gamma=0.997, lam=0.95):
 
 def make_video(frames, output_path, fps=30):
     frames = frames.cpu().detach()
-    frames_video = (frames*255 + 0.5).to(dtype=torch.uint8)
+    frames_video = (frames*255).to(dtype=torch.uint8)
     frames_video = frames_video.permute(0,2,3,1).numpy()
     frames_video = frames_video[:, :, :, ::-1]
     num_frames, height, width, _ = frames_video.shape
@@ -106,32 +111,33 @@ def AGC(parameters, clip_factor=0.01, eps=1e-3):
         p.grad.copy_(torch.where(trigger, scaled_g, g_data))
 
 
-def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, continues, entropy_scale=3e-4):
+def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, c_soft, c_hard=None, entropy_scale=3e-4):
     """Actor loss REINFORCE style"""
-    s = ema_scaler(td_return)
+    s = ema_scaler(td_return, c_hard)
   
     normalized_advantage = ((td_return - critic_values) / torch.clamp(s, min=1)).detach()
     
     per_step_objective = (normalized_advantage * action_log_prob) + (entropy_scale * entropy)
-    masked_objective = per_step_objective * continues
-    lengths = continues.sum(dim=1).clamp(min=1.0)
-    final_loss = -(masked_objective.sum(dim=1) / lengths).mean()
     
     
+    lengths = c_soft.sum(dim=1).clamp(min=1.0)
+
+    final_loss = final_loss = -(( (per_step_objective * c_soft).sum(dim=1) / lengths).mean())
     ema_scale = s.detach().cpu().numpy().mean()
-    avantage = ((normalized_advantage * action_log_prob).detach().sum() / lengths).mean().item()
-    entropy = ((entropy_scale * entropy).detach().sum() / lengths).mean().item()
-    return final_loss, ema_scale, avantage, entropy
+    advantage_metric = ((normalized_advantage * action_log_prob).detach().sum(dim=1) / lengths).mean().item()
+    entropy_metric = ((entropy_scale * entropy).detach().sum(dim=1) / lengths).mean().item()
+    return final_loss, ema_scale, advantage_metric, entropy_metric
+
 
 def critic_loss(v_hat, target, continues):
     
-   
     log_probs = torch.nn.functional.log_softmax(v_hat, dim=-1)   
     
     per_step_loss = -(target * log_probs).sum(dim=-1)
     
-    lengths = continues.sum().clamp(min=1.0)
-    final_loss = (per_step_loss * continues).sum() / lengths
+    lengths = continues.sum(dim=1).clamp(min=1.0)
+    final_loss = (per_step_loss * continues).sum(dim=1) / lengths
+    final_loss = final_loss.mean()
 
     return final_loss
 

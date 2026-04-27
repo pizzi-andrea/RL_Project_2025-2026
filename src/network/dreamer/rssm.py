@@ -85,12 +85,14 @@ class RSSM(nn.Module): # need specific train loop
     def __init__( #x_t has shape [B,L,K]
         
         self,
-        action_dim: int=16,
-        h_dim: int = 1024, # deterministic hidden state dimension
-        obs_dim:int = 1024,
+        action_dim: int,
+        obs_dim:int,
+        att_dim: int,
+        
+        h_dim: int = 4094, # deterministic hidden state dimension
         stoch_latents: int = 32,   # L (number of discrete latent variables)
         stoch_classes: int = 32,   # K (number of classes per latent variable)
-        att_dim: int = 6,
+        
         hidden_dim: int = 1024,
         num_gru_blocks: int = 8,
         unimix: float = 0.01,
@@ -120,35 +122,26 @@ class RSSM(nn.Module): # need specific train loop
         # attribute game (integer)
         self.att_dim = att_dim
 
-        self.action_proj = nn.Sequential(
-            nn.Linear(in_features=action_dim, out_features=hidden_dim),
-            nn.RMSNorm(hidden_dim),
-            nn.SiLU()
-        )
-
-        self.attribute_proj = nn.Sequential(
-            nn.Linear(in_features=att_dim, out_features=hidden_dim),
-            nn.RMSNorm(hidden_dim),
-            nn.SiLU()
-
-        )
-        
+        # flat z dim
+        self.z_dim = hidden_dim
 
         self.z_embed = nn.Sequential(
             nn.Linear(self.K * self.L, hidden_dim),
-            nn.RMSNorm(hidden_dim),
-            nn.SiLU()
+          
         )
-
+        #print(action_dim + obs_dim + self.z_dim - 1536)
+        #print(action_dim)
+        #print(obs_dim)
+        #print(self.z_dim)
+       
         self.gru_proj = nn.Sequential(
-            nn.Linear(in_features=3*hidden_dim, out_features=hidden_dim),
-            nn.RMSNorm(hidden_dim),
-            nn.SiLU()
+            nn.Linear(in_features=action_dim + obs_dim + self.z_dim, out_features=hidden_dim),
+           
         )
 
-        self.z_dim = hidden_dim
+        
         self.block_size = h_dim // self.num_gru_blocks
-        self.gru_input_size = action_dim + att_dim + self.z_dim # z_emb + a_emb + h_mixed_proj
+        self.gru_input_size = action_dim + att_dim + hidden_dim # z_emb + a_emb + h_mixed_proj
         
         print("expected GRU", self.gru_input_size)
         self.gru_cell = DreamerGRUCell(
@@ -159,23 +152,36 @@ class RSSM(nn.Module): # need specific train loop
         
         # predict encoded rappresentation z_hat given GRUcell hidden state and input rappresentation
         self.prior_net = nn.Sequential(
-            nn.Linear(h_dim, hidden_dim), 
+            nn.Linear(h_dim, hidden_dim*2), 
+            nn.RMSNorm(hidden_dim*2),          
+            nn.SiLU(),
+
+            nn.Linear(hidden_dim*2, hidden_dim), 
             nn.RMSNorm(hidden_dim),          
             nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim), 
+
+             nn.Linear(hidden_dim, hidden_dim), 
             nn.RMSNorm(hidden_dim),          
             nn.SiLU(),
+
             nn.Linear(hidden_dim, self.K * self.L) 
         )
 
         # predict encoded rappresentation z_hat given only GRUcell hidden state 
         self.post_net = nn.Sequential(
-            nn.Linear(h_dim + obs_dim, hidden_dim),
-            nn.RMSNorm(hidden_dim),
+            nn.Linear(h_dim + obs_dim, hidden_dim*2),
+            nn.RMSNorm(hidden_dim*2),
             nn.SiLU(),
+
+            nn.Linear(hidden_dim*2, hidden_dim), 
+            nn.RMSNorm(hidden_dim),          
+            nn.SiLU(),
+
+
             nn.Linear(hidden_dim, hidden_dim),
             nn.RMSNorm(hidden_dim),
             nn.SiLU(),
+
             nn.Linear(hidden_dim, self.K * self.L)
         )
 
@@ -199,12 +205,12 @@ class RSSM(nn.Module): # need specific train loop
         
         z_flat  = self.compute_stochastic(z_t)
 
+   
         if a_t is not None:
             z_flat = torch.cat([z_flat, a_t], dim=-1)
 
-        z_flat = self.gru_proj(z_flat)
 
-        
+        z_flat = self.gru_proj(z_flat)
         h_t1 = self.gru_cell(z_flat, h_t)
 
         
@@ -239,9 +245,7 @@ class RSSM(nn.Module): # need specific train loop
         att_t: torch.Tensor,
         mask_t: Optional[torch.Tensor] = None,
     ) -> Tuple[RSSMState, torch.Tensor]:
-
-        action_t = self.action_proj(action_t)
-        att_t = self.attribute_proj(att_t)
+       
 
         a_t = torch.cat([action_t, att_t], dim=-1)
         
@@ -270,8 +274,6 @@ class RSSM(nn.Module): # need specific train loop
         mask_t: Optional[torch.Tensor] = None,
     ) -> Tuple[RSSMState, torch.Tensor]:
         
-        action = self.action_proj(action)
-        user_att = self.attribute_proj(user_att)
         
         a_t = torch.cat([action, user_att], dim=-1)
 

@@ -15,16 +15,24 @@ class Critic(nn.Module):
         self.register_buffer("buckets", torch.linspace(min_buckets, max_buckets, num_buckets)  ) 
         
         self.l1 = nn.Sequential(
-            nn.Linear(in_features=dim_state, out_features=hidden_dim),
-            nn.RMSNorm(hidden_dim),
+            nn.Linear(in_features=dim_state, out_features=hidden_dim*2),
+            nn.RMSNorm(hidden_dim*2),
             nn.SiLU(),
             
         )
         self.l2 = nn.Sequential(
+            nn.Linear(in_features=hidden_dim*2, out_features=hidden_dim),
+            nn.RMSNorm(hidden_dim),
+            nn.SiLU(),
+        )
+
+        self.l3 = nn.Sequential(
             nn.Linear(in_features=hidden_dim, out_features=hidden_dim),
             nn.RMSNorm(hidden_dim),
             nn.SiLU(),
         )
+
+
         
         self.buckets_proj = nn.Linear(in_features=hidden_dim, out_features=num_buckets)
         self.softmax = nn.Softmax(-1)
@@ -36,6 +44,7 @@ class Critic(nn.Module):
     def forward(self, x):
         x = self.l1(x)
         x = self.l2(x)
+        x = self.l3(x)
 
         pred_values_log =  self.buckets_proj(x)
         pred_values_prob = self.softmax(pred_values_log)
