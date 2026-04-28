@@ -111,7 +111,7 @@ if __name__ == "__main__":
             game_info_next = game_next["gamevariables"]
             done           = terminated or truncated
 
-            print(f"{name}|{local_act}|{reward}")
+            #print(f"{name}|{local_act}|{reward}")
 
             att = mapper.stats_local2global(game_info_next)
 

@@ -5,6 +5,7 @@ import argparse
 import os
 from pathlib import Path
 import torch
+from tqdm.auto import tqdm
 from globals import *
 from lightning import Trainer
 from lightning.pytorch.loggers import TensorBoardLogger
