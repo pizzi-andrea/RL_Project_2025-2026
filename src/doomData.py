@@ -1,5 +1,3 @@
-import cv2 as cv
-import os
 import numpy as np
 import torch
 import pandas as pd
@@ -9,34 +7,8 @@ import torch
 from pathlib import Path
 from PIL import Image
 from pathlib import Path
-from torch.utils.data import Dataset, DataLoader
-from torchvision.transforms.v2 import Compose, Resize, ToImage, ToDtype
-from torchvision.io import decode_image
-from torchvision.utils import save_image
-from tqdm import tqdm
+from torch.utils.data import Dataset
 from priority_functions import PriorityExperienceReplay
-
-class DoomDataset (Dataset):
-    """Simple dataset implementation for VAE pre-training"""
-    def __init__(self, base_path, resize=(64,64)):
-        super().__init__()
-        self.paths = []
-        self.transformation = Compose([
-            Resize(resize),
-            ToImage(),
-            ToDtype(dtype=torch.float32, scale=True)
-        ]) 
-        for item in Path(base_path).glob('*'):
-            if item.is_dir():
-                self.paths.extend([item.joinpath(name) for name in os.listdir(item)])
-    
-
-    def __getitem__(self, index):
-        image = Image.open(self.paths[index]).convert("RGB")
-        return self.transformation(image)
-
-    def __len__(self):
-        return len(self.paths)
 
 class EpisodicDoomDataset(Dataset):
     def __init__(self, 
@@ -186,48 +158,3 @@ def collate_fn(batch):
 def collect_episodes_from_buffer(buffer:PriorityExperienceReplay, max_dim:int=5000):
     buff_path, pririty_idx, buffer_idx, weights  = buffer.get(max_dim)
     return buff_path, pririty_idx, buffer_idx, weights 
-
-
-def serialize_episode(episode: list[dict],
-                      save_path: str | Path,
-                      resize: tuple[int, int] = (160, 120), 
-                      ids_name:str="ids",
-                      obs_name:str="obs", 
-                      act_name:str="action",
-                      r_name:str="reward",
-                      done_name:str="done",
-                      pl_att:str="att_player") -> Path:
-    obs = []
-    action = []
-    reward = []
-    done = []
-    user_att = []
-    ids = []
-    
-    for transition in episode:
-        transition[obs_name] = cv.resize(transition[obs_name], resize)
-        obs.append(torch.from_numpy(transition[obs_name]).to(torch.uint8))
-        action.append(torch.from_numpy(transition[act_name]).to(torch.float16))
-        reward.append(torch.tensor(transition[r_name], dtype=torch.float16))
-        done.append(torch.tensor(transition[done_name], dtype=torch.bool))
-        user_att.append(torch.from_numpy(transition[pl_att]).to(torch.float16))
-        ids.append(torch.tensor(transition[ids_name], dtype=torch.int32))
-
-    
-
-    buff = {
-        "obs": torch.stack(obs).permute((0,3,1,2)),
-        "action": torch.stack(action),
-        "reward": torch.stack(reward),
-        "done": torch.stack(done),
-        "user_att": torch.stack(user_att),
-        "ids": torch.stack(ids)
-    }
-    
-    torch.save(buff, save_path)
-    return {"ids_name":"ids", "obs_name":"obs", "act_name":"action", "r_name":"reward", "done_name":"done", "pl_att":"user_att"}
-
-
-def deserialize_episode(file_path:str|Path) -> dict[str,torch.Tensor]:
-    episode_data = torch.load(file_path, map_location='cpu')
-    return episode_data

@@ -48,103 +48,90 @@ class EnviromentAdapter:
     def act_in_env(self, enviroment_id:str, n_episodes:int=1, frame_skip:int=1, max_length:int=500, graphics:bool=False, preprocess=None, post_process=None):
         
         self.agent.to(self.device)
-        # env definition #######################################################################################################################
         render_mode = "human" if graphics else "rgb_array"
         env = gymnasium.make(enviroment_id, render_mode=render_mode, max_buttons_pressed=1, frame_skip=frame_skip, max_episode_steps=max_length)
-        ########################################################################################################################################
         
-        # local mapping ###############################################################################
-        local_stat_name = [v.name for v in env.unwrapped.game.get_available_game_variables()]
-        local_buttons_name = ['NO-OPP'] + [b.name for b in env.unwrapped.game.get_available_buttons()]
+        # Inizializzazione della utility DoomMap per coerenza con DoomGen
+        mapper = DoomMap(env)
+        
         episode_rewards = []
-        ###############################################################################################
-
-        # define masks ########################################################################
-        act_mask_dict = dict.fromkeys(DoomNames.buttons_names, 0)
-        for b in local_buttons_name: act_mask_dict[b] = 1
-        act_mask = np.array([act_mask_dict[n] for n in DoomNames.buttons_names], dtype=bool)
-        #######################################################################################
-
         best_episode = -inf  
         best_path = None    
         
         for episode in range(n_episodes):
-            # single episode variables ###########
             self.reset_memory_agent()
             
-            # init env
             game, _ = env.reset()
-            s = game["screen"]
-            game_info = game["gamevariables"]
-            prev_act_t = np.zeros((len(DoomNames.buttons_names)), dtype=np.uint8) # NO-OPP
+            s = game["screen"]         # s_t iniziale
+            game_info = game["gamevariables"] # info_t iniziale
+            
+            # Azione precedente inizializzata a zero (NO-OPP)
+            prev_act_t = np.zeros((len(DoomNames.buttons_names)), dtype=np.uint8) 
           
             total_reward = 0
             done = False
             ids = 0
-            ###
-
             current_episode_buffer = []
-            ####################################
-            
-            # Inizializziamo l'azione precedente come zero
-            
-            while not done:
-                # encode attributes from env #############################
-                att = OrderedDict.fromkeys(DoomNames.att_player_names, 0)
-                for a, n in zip(game_info, local_stat_name): att[n] = a
-                ##########################################################
 
-                # use agent to performe one-step action ##################
+            while not done:
+                # 1. Preparazione attributi correnti per l'input dell'agente (Stato t)
+                att_t_global = mapper.stats_local2global(game_info)
+
+                # 2. L'agente decide l'azione basandosi su s_t e att_t
+                # Usiamo mapper._gym_action_names per garantire che l'indice locale 
+                # corrisponda esattamente a quello atteso dal wrapper Gymnasium
                 local_action, one_hot_act_t = self.act(
-                    s, list(att.values()), 
+                    s, list(att_t_global.values()), 
                     prev_action=prev_act_t, 
-                    mask_actions=act_mask, 
-                    local_act_order=local_buttons_name,
+                    mask_actions=mapper.act_mask, 
+                    local_act_order=mapper._gym_action_names,
                     preprocess=preprocess
                 )
-                ##########################################################
                 
-                # convert action for serialization
-                act_dict = OrderedDict(zip(DoomNames.buttons_names, one_hot_act_t))
-
-                # collect new step
+                # 3. Esecuzione azione nell'ambiente
                 game_next, reward, terminated, truncated, _ = env.step(local_action)
                 done = terminated or truncated
+                
+                s_next = game_next["screen"]
+                game_info_next = game_next["gamevariables"]
 
+                # 4. Mappatura Risultati (Stato t+1) coerente con DoomGen
+                # Otteniamo il dizionario delle azioni globali e degli attributi post-azione
+                act_global_dict = mapper.action_local2global(local_action)
+                att_next_global = mapper.stats_local2global(game_info_next)
+
+                # Gestione salvataggio osservazione (con eventuale resize/crop)
+                obs_to_store = s_next
                 if post_process is not None:
-                    s = post_process(s)
+                    obs_to_store = post_process(s_next)
 
-                # 4. Store (Sincronizzazione doomGen: s_t, a_t, att_t, ids_t)
                 transition = {
-                    "obs": s,
-                    "ids": ids, 
-                    "reward": reward,
-                    "done": bool(done),
+                    "obs":    obs_to_store,
+                    "ids":    ids, 
+                    "reward": float(reward),
+                    "done":   bool(done),
                 }
-                current_episode_buffer.append(transition | dict(act_dict) | dict(att))
+                
+                # Merge identico a doomGen: [Dati base] + [Azioni Globali] + [Attributi Globali t+1]
+                current_episode_buffer.append(transition | act_global_dict | att_next_global)
 
-                # 5. Avanzamento
+                # 5. Avanzamento per il prossimo step
                 total_reward += reward
-                s = game_next["screen"]
-                game_info = game_next["gamevariables"]
-                prev_act_t = one_hot_act_t # a_t diventa a_t-1 per il prossimo step
+                s = s_next
+                game_info = game_info_next
+                prev_act_t = one_hot_act_t
                 ids += 1
             
             # Salvataggio tramite memory manager
-            episode_path = self.memory_m.alloc_episode(current_episode_buffer, **{"mask": act_mask})
-            
+            episode_path = self.memory_m.alloc_episode(current_episode_buffer, **{"mask": mapper.act_mask})
             current_episode_buffer.clear() 
             episode_rewards.append(total_reward)
             
-            print(f"Episode {self.memory_m.episodes_indexs[-1]} of {episode}/{n_episodes} finished. Reward: {total_reward}")
-            
-            # Aggiornamento del miglior episodio per il logging/checkpoint
+            print(f"Episode {episode+1}/{n_episodes} finished. Reward: {total_reward}")
             if total_reward > best_episode:
                 best_episode = total_reward
                 best_path = episode_path
 
-     
         env.close()
-       
         self.reset_memory_agent() 
         return np.mean(episode_rewards).item(), best_path

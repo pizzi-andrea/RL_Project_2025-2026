@@ -2,7 +2,7 @@
 
 doom_scenarios=("VizdoomBasic-v1")
 episodes=(15000)
-skip_frame=(1)
+skip_frame=(4)
 
 sticky=("--sticky")
 

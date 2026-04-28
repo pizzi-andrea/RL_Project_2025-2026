@@ -2,73 +2,73 @@ import numpy as np
 from dataclasses import dataclass
 from collections import OrderedDict
 
+
 @dataclass(frozen=True)
 class DoomNames:
-    """Global player attribute names for standard VizDoom enviroment"""
-    att_player_names: tuple[str]  = ('AMMO0', 'AMMO2','AMMOSELECTED_WEAPON', 'ARMOR', 'HEALTH', 'KILLCOUNT', 'SELECTED_WEAPON_AMMO')
-    buttons_names: tuple[str]     =    ('NO-OPP', 'ATTACK', 'CROUCH', 'JUMP', 'MOVE_BACKWARD', 'MOVE_FORWARD', 'MOVE_LEFT', 'MOVE_RIGHT', 'RELOAD', 'SELECT_NEXT_WEAPON', 'SELECT_PREV_WEAPON', 'SPEED', 'STRAFE', 'TURN_LEFT', 'TURN_RIGHT', 'USE', 'ZOOM', "SELECT_WEAPON1", "SELECT_WEAPON2", "SELECT_WEAPON3", "SELECT_WEAPON4", "SELECT_WEAPON5", "SELECT_WEAPON6", "SELECT_WEAPON7")
+    att_player_names: tuple[str] = (
+        'AMMO0', 'AMMO2', 'AMMOSELECTED_WEAPON', 'ARMOR',
+        'HEALTH', 'KILLCOUNT', 'SELECTED_WEAPON_AMMO'
+    )
+    buttons_names: tuple[str] = (
+        'NO-OPP', 'ATTACK', 'CROUCH', 'JUMP', 'MOVE_BACKWARD', 'MOVE_FORWARD',
+        'MOVE_LEFT', 'MOVE_RIGHT', 'RELOAD', 'SELECT_NEXT_WEAPON',
+        'SELECT_PREV_WEAPON', 'SPEED', 'STRAFE', 'TURN_LEFT', 'TURN_RIGHT',
+        'USE', 'ZOOM', 'SELECT_WEAPON1', 'SELECT_WEAPON2', 'SELECT_WEAPON3',
+        'SELECT_WEAPON4', 'SELECT_WEAPON5', 'SELECT_WEAPON6', 'SELECT_WEAPON7'
+    )
 
-@dataclass(frozen=True)
+
 class DoomMap:
-    """Global class indexs for standard VizDoom enviroment"""
 
+    def __init__(self, env):
+        self._local_buttons: list[str] = [b.name for b in env.unwrapped.game.get_available_buttons()]
+        self._local_stats:   list[str] = [v.name for v in env.unwrapped.game.get_available_game_variables()]
 
-    @staticmethod
-    def local2global(values:list[int|float]|np.ndarray[int|float], names:list[str], global_order:list[str], one_hot:bool=True) -> dict[str, int]:
-        
-        d = OrderedDict.fromkeys(global_order, 0)
-        v = values
-        
-        if one_hot:
-            v = [0]*len(global_order)
-            v[values] = 1
+        self._gym_action_names: list[str] = []
+        for action_vec in env.unwrapped.button_map:
+            pressed = [self._local_buttons[i] for i, v in enumerate(action_vec) if v]
+            self._gym_action_names.append(pressed[0] if pressed else 'NO-OPP')
 
-        for i, n in enumerate(names):
-            d[n] = v[i]
-        
-        return d
-    
-    @staticmethod
-    def reindex_categorical(name:str, global_order:list[str]) -> int:
-        return global_order.index(name)
-    
-    @staticmethod
-    def one_hot(v:int, n_classes:int) -> np.ndarray:
-        one_hot = np.zeros(shape=n_classes, dtype=np.int8)
-        one_hot[v] = 1
-        return one_hot
-    
-    
-    
-    @staticmethod
-    def global2local(values:list[int|float]|np.ndarray[int|float], names:list[str], global_order:list[str]) -> dict[str, int]:
-        """
-        Estrae i valori dei bottoni locali da un vettore globale.
-        
-        Args:
-            values: Lista o array dei valori in ordine globale (len = len(global_order))
-            names: Lista dei nomi dei bottoni locali (sottoinsieme locale)
-            global_order: Lista dei nomi dei bottoni globali (riferimento)
-            one_hot: Flag di simmetria (non strettamente necessario per l'estrazione, ma utile per assert logici)
-            
-        Returns:
-            OrderedDict con chiavi = names e valori estratti dal vettore globale.
-        """
-        d = OrderedDict.fromkeys(names, 0)
-        
-        # Se viene passato un dizionario invece di una lista, estraiamo i valori se necessario,
-        # ma la firma richiede list/ndarray. Assumiamo 'values' sia allineato a 'global_order'.
-        
-        for local_name in names:
-            # Troviamo l'indice che questo bottone ha nel vettore globale
-            if local_name in global_order:
-                g_idx = global_order.index(local_name)
-                # Assegniamo al dizionario locale il valore presente nel vettore globale
-                d[local_name] = values[g_idx]
-            else:
-                # Gestione sicurezza: se un nome locale non esiste nel globale
-                # (potrebbe capitare se la config è disallineata)
-                pass 
+        _mask_dict = dict.fromkeys(DoomNames.buttons_names, False)
+        for b in self._local_buttons:
+            if b in _mask_dict:
+                _mask_dict[b] = True
+        self.act_mask: np.ndarray = np.array(list(_mask_dict.values()), dtype=bool)
 
-        return d
-    
+    # ------------------------------------------------------------------
+
+    @property
+    def local_buttons(self) -> list[str]:
+        return self._local_buttons
+
+    @property
+    def local_stats(self) -> list[str]:
+        return self._local_stats
+
+    @property
+    def n_actions(self) -> int:
+        return len(self._gym_action_names)
+
+    # ------------------------------------------------------------------
+
+    def action_local2global(self, action: int) -> dict[str, int]:
+        name = self._gym_action_names[action]
+        global_act = dict.fromkeys(DoomNames.buttons_names, 0)
+        global_act[name] = 1
+        return global_act
+
+    def action_global2local(self, global_act: dict[str, int]) -> tuple[int, str]:
+        pressed = next((k for k, v in global_act.items() if v == 1 and k in self._gym_action_names), 'NO-OPP')
+        return self._gym_action_names.index(pressed), pressed
+
+    # ------------------------------------------------------------------
+
+    def stats_local2global(self, values: list | np.ndarray) -> OrderedDict[str, float]:
+        global_stats = OrderedDict.fromkeys(DoomNames.att_player_names, 0.0)
+        for i, name in enumerate(self._local_stats):
+            if name in global_stats:
+                global_stats[name] = float(values[i])
+        return global_stats
+
+    def stats_global2local(self, global_stats: dict[str, float]) -> np.ndarray:
+        return np.array([global_stats.get(name, 0.0) for name in self._local_stats], dtype=np.float32)
