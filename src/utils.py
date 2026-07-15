@@ -1,3 +1,5 @@
+import logging
+
 import cv2 as cv
 import os
 from pathlib import Path
@@ -47,3 +49,13 @@ def load_cfg_file(env_name:str) -> Path:
         
     relative =  Path("../configs") / f"{name}.cfg"
     return relative.resolve()
+
+def configure_logger(process_name: str):
+    logging.basicConfig(
+        level=logging.INFO,
+       
+        format=f"[%(levelname)s] [%(asctime)s] [{process_name}]: %(message)s",
+        datefmt="%H:%M:%S"
+    )
+    logger = logging.getLogger(process_name)
+    return logger

@@ -4,20 +4,21 @@ PER_config:
 
 global_config:
   multi_cpu: 24
-  max_episode_length: 1000
-  warmup: 10
-  Project_logs: "Project_2"
+  max_episode_length: 600
+  warmup: 4
+  Project_logs: "test1"
   action_shape: 24
   att_shape: 7
   skip_frame: 4
   img_channels: 3
   img_size_h : 64
   img_size_l : 64
-  dreamer_iterations: 1000
+  dreamer_iterations: 128
   dreamer_w: "weights/rssm/rssm.ckpt"
   policy_w : "weights/policy/policy.ckpt"
   chunk: 64
   precision: "32-true" # bf16-mixed
+  position_gain: 0.01
 
   envs:
     - "VizdoomBasic-v1" # VizdoomBasic-v1 VizdoomHealthGathering-v1
@@ -30,7 +31,7 @@ vae_config:
   model_dim: 384
 
 curiosity_config:
-  alpha: 0.5
+  alpha: 0.3
   beta: 0.1
   eps: 0.000001
   p_max: 1
@@ -73,7 +74,7 @@ policy_config:
   horizon: 14
   burn_in: 15
   lr: 0.00004 # 0.00004
-  actor_entropy: 0.0003  # aumentata da 0.00005
+  actor_entropy: 0.00005  # aumentata da 0.00005
   train_batch: 32
   batch_acc: 1
   hidden_dim: 128

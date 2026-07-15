@@ -3,7 +3,7 @@ import numpy as np
 import vizdoom as zd
 
 class Wrapper_vz_basic(gym.Wrapper):
-    def __init__(self, env, distance_reward_scale=0.1):
+    def __init__(self, env, distance_reward_scale=0.05):
         super().__init__(env)
         self.distance_reward_scale = distance_reward_scale
         self.prev_distance = None
@@ -30,7 +30,7 @@ class Wrapper_vz_basic(gym.Wrapper):
         if state_after is not None:
             ammo_after = game.get_game_variable(zd.GameVariable.AMMO2)
             if ammo_after < ammo_before:
-                reward += 4.0  # Compensa esattamente la penalità nativa di -5
+                reward += 4.5  # Compensa esattamente la penalità nativa di -5
         
         # 4. Calcoliamo la distanza per il reward denso
         current_distance = self._get_distance_to_target()

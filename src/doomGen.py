@@ -15,7 +15,7 @@ from globals import *
 from dd_wrapper import *
 from dd_wrapper import *
 import cv2 as cv
-import logging
+from utils import  *
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run rolling procedure')
@@ -32,12 +32,7 @@ if __name__ == "__main__":
     bucket_size = 500
     buckets = []
 
-    logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(message)s",
-    datefmt="%H:%M:%S"
-)
-    logger = logging.getLogger("doomGen")
+    logger = configure_logger("doomGen")
 
     args = parser.parse_args()
 
@@ -108,28 +103,40 @@ if __name__ == "__main__":
 
     for episode in tqdm(range(init_episode, init_episode + args.episodes)):
         
-        # init episode vars
+        # 1. Inizializzazione dell'episodio (Step 0)
         game, _   = env.reset()
         s         = game["screen"]
         game_info = game["gamevariables"]
-        # crop scena to remove unusfull scena elements
+        
         if args.crop:
             s = s[100:, 54:267]
-
-        # resize to specified dimension
         s = cv.resize(s, (args.resolution_w, args.resolution_h), interpolation=cv.INTER_NEAREST)
 
-        ids         = 0
+        # Creiamo un'azione dummy completamente a zero per lo Step 0
+        dummy_act = {k: 0 for k in mapper.action_local2global(0).keys()}
+        init_att = mapper.stats_local2global(game_info)
+
+        # Salviamo lo Step 0 nativamente
+        init_transition = {
+            "obs":    s,
+            "ids":    0,
+            "reward": 0.0,
+            "done":   False,
+        }
+        buffer.append(init_transition | dummy_act | init_att)
+
+        # Inizializziamo le variabili per il ciclo
+        ids         = 1  # Lo step successivo sarà il numero 1
         done        = False
         act_counter = 0
         act_old     = env.action_space.sample()
-        # ---------------------------------------------------------------------------------------------
-
-        # loop single episode
+        
         logger.info("started episode %i of %i", episode_cc, args.episodes)
+        
+        # 2. Ciclo principale dell'episodio (da Step 1 a T)
         while not done:
 
-            # sticy bit logic
+            # Logica sticky bit
             if act_counter >= sticky:
                 action      = env.action_space.sample()
                 act_old     = action
@@ -139,18 +146,14 @@ if __name__ == "__main__":
                 act_counter += 1
 
             act = mapper.action_local2global(action)
-            
             name, local_act = mapper.action_global2local(act)
-
             assert act[local_act] == 1
 
-
+            # Eseguiamo l'azione
             game_next, reward, terminated, truncated, info = env.step(action)
             s_next         = game_next["screen"]
             game_info_next = game_next["gamevariables"]
             done           = terminated or truncated
-
-            #print(f"{name}|{local_act}|{reward}")
 
             att = mapper.stats_local2global(game_info_next)
 
@@ -158,20 +161,20 @@ if __name__ == "__main__":
                 s_next = s_next[100:, 54:267]
             s_next = cv.resize(s_next, (args.resolution_w, args.resolution_h), interpolation=cv.INTER_NEAREST)
 
-            # collect full transition
+            # Salviamo s_next associato all'azione appena compiuta, al reward e al done
             transition = {
-                "obs":    s,
+                "obs":    s_next,  # Salviamo il frame di arrivo t+1
                 "ids":    ids,
                 "reward": float(reward),
                 "done":   bool(done),
             }
             buffer.append(transition | act | att)
 
-            
-
+            # Avanzamento dei riferimenti temporali
             s         = s_next
             game_info = game_info_next
             ids      += 1
+            
         episode_done += 1 if bool(terminated) else 0
         logger.info("end episode %i with status %i", episode_cc, terminated)
 

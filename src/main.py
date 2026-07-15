@@ -2,7 +2,6 @@ import numpy as np
 import cv2 as cv
 
 import argparse
-import os
 from pathlib import Path
 import torch
 from tqdm.auto import tqdm
@@ -20,15 +19,13 @@ from network.encoder.VAE import VAE
 from network.worldModel.dreamer import Dreamer
 from network.adapters import PERAdapter
 from torchvision.transforms.v2 import *
-from torchvision.transforms import InterpolationMode
-from priority_functions import (
-    AdversarialReplayPriority,
-    CountBasedPriority,
-    CuriosityReplayPriority,
-)
+
+from priority_functions import *
 import warnings
+
 from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.callbacks import RichProgressBar
+
 class StepLimitCallback(Callback):
     def __init__(self, steps_per_round):
         super().__init__()
@@ -136,20 +133,7 @@ def main():
         #vae_model = VAE.load_from_checkpoint(config["global_config"]["vae_w"])
     #else:
     vae_model = VAE(latent_dim=config["vae_config"]["latent_dim"], model_dim=config["vae_config"]["model_dim"])
-        #if config["vae_config"]["train_epoch"] > 0:
-        #    vae_trainer =  Trainer(
-        #        logger=TensorBoardLogger(log_experiment, name="VAE"), 
-        #        max_epochs=config["vae_config"]["train_epoch"]
-        #    )
-        #    vae_train_loader = DataLoader(
-        #        DoomDataset(config["vae_config"]["VAE_dataset_path_train"], 
-        #                    resize=(config["global_config"]["img_size_h"], config["global_config"]["img_size_l"])), 
-        #                    batch_size=config["vae_config"]["train_batch"], 
-        #                    shuffle=False, 
-        #                    num_workers=os.cpu_count()-1,
-        #                    persistent_workers=True)
-        #    vae_valid_loader = DataLoader(DoomDataset(config["vae_config"]["VAE_dataset_path_valid"], resize=(config["global_config"]["img_size_h"],config["global_config"]["img_size_l"])), batch_size=config["vae_config"]["train_batch"], shuffle=False, num_workers=os.cpu_count()-1, persistent_workers=True,)
-        #    vae_trainer.fit(vae_model, vae_train_loader, vae_valid_loader)
+   
         
     if args.load_weights and Path(config["global_config"]["dreamer_w"]).exists():
         rssm_model = Dreamer.load_from_checkpoint(config["global_config"]["dreamer_w"],
