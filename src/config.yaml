@@ -23,7 +23,7 @@ global_config:
     - "VizdoomBasic-v1" # VizdoomBasic-v1 VizdoomHealthGathering-v1
 
   envs_episodes:
-    -  100
+    -  10
 
 vae_config:
   latent_dim: 384

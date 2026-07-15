@@ -120,11 +120,11 @@ class EpisodicDoomDataset(Dataset):
 def collate_fn(batch):
  
     batch_obs = [b["obs"] for b in batch]
-    batch_action = [torch.from_numpy(b["action"]) for b in batch]
-    batch_reward = [torch.from_numpy(b["reward"]) for b in batch]
-    batch_done = [torch.from_numpy(b["done"]) for b in batch]
-    batch_user_att = [torch.from_numpy(b["user_att"]) for b in batch]
-    batch_idx = torch.stack( [torch.as_tensor(b["priority_idx"],dtype=torch.uint32) for b in batch])
+    batch_action = [torch.tensor(b["action"]) for b in batch]
+    batch_reward = [torch.tensor(b["reward"]) for b in batch]
+    batch_done = [torch.tensor(b["done"]) for b in batch]
+    batch_user_att = [torch.tensor(b["user_att"]) for b in batch]
+    batch_idx = torch.stack( [torch.tensor(b["priority_idx"],dtype=torch.uint32) for b in batch])
     batch_mask = torch.stack( [torch.as_tensor(b["mask_action"],dtype=torch.bool) for b in batch])
     batch_weight = torch.stack([torch.as_tensor(b["weight"],dtype=torch.float32) for b in batch])
     batch_is_first = torch.stack([torch.as_tensor(b["is_first"],dtype=torch.bool) for b in batch])

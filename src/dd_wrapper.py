@@ -1,0 +1,69 @@
+import gymnasium as gym
+import numpy as np
+import vizdoom as zd
+
+class Wrapper_vz_basic(gym.Wrapper):
+    def __init__(self, env, distance_reward_scale=0.1):
+        super().__init__(env)
+        self.distance_reward_scale = distance_reward_scale
+        self.prev_distance = None
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self.prev_distance = self._get_distance_to_target()
+        return obs, info
+
+    def step(self, action):
+        game = self.env.unwrapped.game
+        
+        # 1. Controlliamo le munizioni PRIMA dell'azione
+        state_before = game.get_state()
+        ammo_before = 0
+        if state_before is not None:
+            ammo_before = game.get_game_variable(zd.GameVariable.AMMO2)
+            
+        # 2. Eseguiamo lo step
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        
+        # 3. Controlliamo le munizioni DOPO l'azione per correggere il reward
+        state_after = game.get_state()
+        if state_after is not None:
+            ammo_after = game.get_game_variable(zd.GameVariable.AMMO2)
+            if ammo_after < ammo_before:
+                reward += 4.0  # Compensa esattamente la penalità nativa di -5
+        
+        # 4. Calcoliamo la distanza per il reward denso
+        current_distance = self._get_distance_to_target()
+        
+        if current_distance is not None and self.prev_distance is not None:
+            distance_delta = self.prev_distance - current_distance
+            shaped_reward = distance_delta * self.distance_reward_scale
+            reward += shaped_reward
+            self.prev_distance = current_distance
+        
+        return obs, reward, terminated, truncated, info
+
+    def _get_distance_to_target(self):
+        game = self.env.unwrapped.game
+        state = game.get_state()
+        
+        if state is None:
+            return None
+        
+        player_pos = None
+        target_pos = None
+        
+        for obj in state.objects:
+            if obj.name == "DoomPlayer":
+                player_pos = (obj.position_x, obj.position_y)
+            elif obj.name == "RedCard" or "Cacodemon" in obj.name or "Sarge" in obj.name: 
+                target_pos = (obj.position_x, obj.position_y)
+                
+        if player_pos is None:
+            player_pos = (game.get_game_variable(zd.GameVariable.POSITION_X), 
+                          game.get_game_variable(zd.GameVariable.POSITION_Y))
+
+        if player_pos and target_pos:
+            return np.sqrt((player_pos[0] - target_pos[0])**2 + (player_pos[1] - target_pos[1])**2)
+        
+        return None

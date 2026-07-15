@@ -46,6 +46,39 @@ class StepLimitCallback(Callback):
 warnings.filterwarnings("ignore", category=UserWarning, module="pygame.pkgdata")
 warnings.filterwarnings("ignore", message="Detected screen format CRCGCB")
 
+ # dataset preprocess
+def simple_preprocessor(x):
+    if len(x.shape) == 3:
+        x = x[np.newaxis,:,:,:]
+    x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
+    return x
+
+
+class SimplerPreprocessor:
+    def __init__(self, obs_resize:tuple[int, int] ):
+        self.obs_resize = obs_resize
+    
+    def __call__(self, x):
+        x = x[100:, 54:267]
+        x = cv.resize(x, self.obs_resize, interpolation=cv.INTER_NEAREST)
+        if len(x.shape) == 3:
+            x = x[np.newaxis,:,:,:]
+
+        x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
+        x = (x.float().div_(255.0).detach())
+        return x
+
+
+class SimplerPostprocessor:
+    def __init__(self, obs_resize):
+        self.obs_resize = obs_resize
+        
+
+    def __call__(self, x):
+        x = x[100:, 54:267]
+        x = cv.resize(x, self.obs_resize, interpolation=cv.INTER_NEAREST)
+        return x
+
 def main():
     cmd = argparse.ArgumentParser()
     cmd.add_argument("--load_weights", action="store_true", required=False, help="load weights from src/weights directory")
@@ -55,51 +88,12 @@ def main():
     validation_log = Path(config["global_config"]["Project_logs"]).joinpath("best_epochs")
     validation_log.mkdir(parents=True, exist_ok=True)
     obs_size = (config["global_config"]["img_size_h"], config["global_config"]["img_size_l"])
-    def robust_preprocessor(x):
-        
-        if len(x.shape) == 3:
-            x = x[np.newaxis,:,:,:]
-        
-        t = []
-        for item in x:
-            lab = cv.cvtColor(item, cv.COLOR_RGB2LAB)
-            l, a, b = cv.split(lab)
-
     
-            clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            cl = clahe.apply(l)
-            
-        
-            limg = cv.merge((cl, a, b))
-            final_img = cv.cvtColor(limg, cv.COLOR_LAB2RGB)
-            t.append(final_img)
-        
-        t = np.stack(t, axis=0)
-        t = torch.from_numpy(t).permute(0, 3, 1, 2).contiguous()
-    
-    # dataset preprocess
-    def simple_preprocessor(x):
-        if len(x.shape) == 3:
-            x = x[np.newaxis,:,:,:]
-        x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
-        return x
+    simpler_preprocessor = SimplerPreprocessor(obs_size)
+    simpler_postprocessor = SimplerPostprocessor(obs_size)
     
     
-    def simple_post_processor(x):
-        x = x[100:, 54:267]
-        x = cv.resize(x, obs_size, interpolation=cv.INTER_NEAREST)
-        return x
-
-    def simple_preprocessor_float32(x):
-        x = x[100:, 54:267]
-        x = cv.resize(x, obs_size, interpolation=cv.INTER_NEAREST)
-        if len(x.shape) == 3:
-            x = x[np.newaxis,:,:,:]
-
-############################################################
-        x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
-        x = (x.float().div_(255.0).detach())
-        return x
+   
   
     image_processor = simple_preprocessor
     log_experiment = Path(config["global_config"]["Project_logs"])
@@ -307,7 +301,7 @@ def main():
             policy_trainer.fit(agent_model, train_dataloaders=policy_train_loader)
         
             for env, n in zip(config["global_config"]["envs"], config["global_config"]["envs_episodes"]):
-                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=config["global_config"]["skip_frame"], max_length=config["global_config"]["max_episode_length"], preprocess=simple_preprocessor_float32, post_process=simple_post_processor)
+                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=config["global_config"]["skip_frame"], max_length=config["global_config"]["max_episode_length"], preprocess=simpler_preprocessor, post_process=simpler_postprocessor)
                 print(f"mean reword collected by policy {reword} in env {env}")
                 create_video_from_frames(best_path.joinpath("obs"), validation_log.joinpath(f"{env}_{epoch}.mp4"), 15)
                 

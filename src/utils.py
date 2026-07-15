@@ -34,3 +34,16 @@ def create_video_from_frames(input_folder, output_path, fps=30):
 
     video_writer.release()
     print(f"Video salvato con successo in: {str(output_path)}")
+
+
+
+def load_cfg_file(env_name:str) -> Path:
+
+    match env_name:
+        case "VizdoomBasic-v1":
+            name = "basic"
+        case _:
+            raise ValueError("cfg not found")
+        
+    relative =  Path("../configs") / f"{name}.cfg"
+    return relative.resolve()
