@@ -314,5 +314,13 @@ class RSSM(nn.Module): # need specific train loop
         z_hat_t1_log = z_hat_t1_log.reshape(B, self.L, self.K)
         
         return z_hat_t1_log
+    
+    def freeze(self):
+        for p in self.parameters():
+            p.requires_grad = False
+    
+    def unfreeze(self):
+        for p in self.parameters():
+            p.requires_grad = True
 
     

@@ -41,31 +41,54 @@ def symexp(x):
 
 
 # utils.py modificato
+# Sostituisci la tua funzione lambda_returns in utils.py
 @torch.no_grad()
-def lambda_returns(rewards, expected_values, continues, gamma=0.997, lam=0.95):
+def lambda_returns(rewards, expected_values, execution_mask, gamma=0.997, lam=0.95):
     """
-    Input shapes: [B, T]
-    Se la sequenza effettiva è 15, T sarà 16 (l'ultimo è il bootstrap).
+    rewards: [B, T]
+    expected_values: [B, T+1] (contiene il frame finale di bootstrap)
+    execution_mask: [B, T]
     """
-    # Inizializziamo i return con la stessa forma
+    # 1. Mascheriamo SOLO i rewards perché condividono la stessa dimensione T
+    rewards = rewards * execution_mask
+    
     returns = torch.zeros_like(expected_values)
     
-    # L'ultimo valore (T) è il nostro bootstrap iniziale
+    # 2. Bootstrap finale (preso dal frame T+1)
     last_ret = expected_values[:, -1]
     returns[:, -1] = last_ret 
     
-    # Ciclo a ritroso partendo dal penultimo step (T-1) fino a 0
+    # 3. Propagazione a ritroso
     for t in reversed(range(expected_values.shape[1] - 1)):
-        # Formula corretta: 
-        # G_t = r_t + gamma * continue_t * [(1 - lambda) * V_{t+1} + lambda * G_{t+1}]
+        target = (1 - lam) * expected_values[:, t + 1] + lam * last_ret
         
-        returns[:, t] = rewards[:, t] + gamma * continues[:, t] * (
-            (1 - lam) * expected_values[:, t + 1] + lam * last_ret
-        )
+        # execution_mask decide se calcolare il futuro (1) o fermarsi (0)
+        returns[:, t] = rewards[:, t] + gamma * execution_mask[:, t] * target
+        
+        # Pulizia rigorosa: se eravamo nel padding, l'intero return a questo step diventa 0.
+        # Questo azzera automaticamente anche i target "sporchi" arrivati da expected_values.
+        returns[:, t] = returns[:, t] * execution_mask[:, t]
+        
         last_ret = returns[:, t]
         
-    # Se vuoi solo i 15 step effettivi (escludendo il bootstrap finale usato per il calcolo)
     return returns[:, :-1]
+
+
+# Sostituisci la tua funzione critic_loss in utils.py
+def critic_loss(v_hat, target, c_soft):
+    """
+    c_soft: valid_mask (o discount) [B, T]
+    """
+    log_probs = torch.nn.functional.log_softmax(v_hat, dim=-1)   
+    per_step_loss = -(target * log_probs).sum(dim=-1)
+    
+    # Applichiamo la maschera ai dati validi
+    weighted_loss = per_step_loss * c_soft
+    
+    lengths = c_soft.sum(dim=1).clamp(min=1.0)
+    final_loss = weighted_loss.sum(dim=1) / lengths
+    
+    return final_loss.mean()
 
 
 def make_video(frames, output_path, fps=30):
@@ -111,35 +134,39 @@ def AGC(parameters, clip_factor=0.01, eps=1e-3):
         p.grad.copy_(torch.where(trigger, scaled_g, g_data))
 
 
-def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, c_soft, c_hard=None, entropy_scale=3e-4):
-    """Actor loss REINFORCE style"""
-    s = ema_scaler(td_return, c_hard)
+def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, c_soft, entropy_scale=3e-4, mask=None):
+    """
+    c_soft: valid_mask [B, T] (1 per dati reali, 0 per padding)
+    """
+    # 1. Calcolo dello scale EMA per normalizzare il vantaggio
+    # DreamerV3 usa questo per stabilizzare la scala dei reward sognati
+    s = ema_scaler(td_return, mask)
   
-    normalized_advantage = ((td_return - critic_values) / torch.clamp(s, min=1)).detach()
+    # 2. Advantage normalizzato (senza gradienti per il critic)
+    # Importante: clampare s per evitare divisioni per zero
+    advantage = (td_return - critic_values).detach()
+    normalized_advantage = advantage / torch.clamp(s, min=1.0)
     
+    # 3. Objective (da massimizzare): log_prob * adv + scale * entropy
+    # Nota: L'entropia viene AGGIUNTA per favorire l'esplorazione
     per_step_objective = (normalized_advantage * action_log_prob) + (entropy_scale * entropy)
     
+    # 4. Applicazione MASCHERA (c_soft)
+    # Azzeriamo l'obiettivo dove i dati non sono validi
+    weighted_objective = per_step_objective * c_soft
     
+    # 5. Media pesata corretta
     lengths = c_soft.sum(dim=1).clamp(min=1.0)
-
-    final_loss = final_loss = -(( (per_step_objective * c_soft).sum(dim=1) / lengths).mean())
-    ema_scale = s.detach().cpu().numpy().mean()
-    advantage_metric = ((normalized_advantage * action_log_prob).detach().sum(dim=1) / lengths).mean().item()
-    entropy_metric = ((entropy_scale * entropy).detach().sum(dim=1) / lengths).mean().item()
-    return final_loss, ema_scale, advantage_metric, entropy_metric
-
-
-def critic_loss(v_hat, target, continues):
+    # Trasformiamo l'objective in LOSS (moltiplicando per -1)
+    final_loss = -( (weighted_objective.sum(dim=1) / lengths).mean() )
     
-    log_probs = torch.nn.functional.log_softmax(v_hat, dim=-1)   
-    
-    per_step_loss = -(target * log_probs).sum(dim=-1)
-    
-    lengths = continues.sum(dim=1).clamp(min=1.0)
-    final_loss = (per_step_loss * continues).sum(dim=1) / lengths
-    final_loss = final_loss.mean()
+    # Metriche
+    with torch.no_grad():
+        adv_metric = ((normalized_advantage * action_log_prob * c_soft).sum(dim=1) / lengths).mean().item()
+        ent_metric = ((entropy_scale * entropy * c_soft).sum(dim=1) / lengths).mean().item()
+        ema_val = s.mean().item()
 
-    return final_loss
+    return final_loss, ema_val, adv_metric, ent_metric
 
 @torch.no_grad()
 def twohot(x, B):
@@ -157,6 +184,7 @@ def twohot(x, B):
     #x = symlog(x)
     min_b = B[0]
     max_b = B[-1]
+    x = x.clamp(min_b, max_b)
     num_buckets = B.shape[0]
     step = (max_b - min_b) / (num_buckets - 1)
 

@@ -311,8 +311,6 @@ def main():
                 print(f"mean reword collected by policy {reword} in env {env}")
                 create_video_from_frames(best_path.joinpath("obs"), validation_log.joinpath(f"{env}_{epoch}.mp4"), 15)
                 
-        
-        torch.cuda.empty_cache()
 
 if __name__ == '__main__':
     torch.set_float32_matmul_precision('high')

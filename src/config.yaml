@@ -4,12 +4,12 @@ PER_config:
 
 global_config:
   multi_cpu: 24
-  max_episode_length: 350
+  max_episode_length: 1000
   warmup: 10
-  Project_logs: "Project"
+  Project_logs: "Project_2"
   action_shape: 24
   att_shape: 7
-  skip_frame: 2
+  skip_frame: 4
   img_channels: 3
   img_size_h : 64
   img_size_l : 64
@@ -20,28 +20,28 @@ global_config:
   precision: "32-true" # bf16-mixed
 
   envs:
-    - "VizdoomBasic-v1"
+    - "VizdoomBasic-v1" # VizdoomBasic-v1 VizdoomHealthGathering-v1
 
   envs_episodes:
     -  100
 
 vae_config:
-  latent_dim: 256
-  model_dim: 256
+  latent_dim: 384
+  model_dim: 384
 
 curiosity_config:
-  alpha: 0.3
-  beta: 0.01
+  alpha: 0.5
+  beta: 0.1
   eps: 0.000001
-  p_max: 5
-  c: 0.05
+  p_max: 1
+  c: 0.1
 
 rssm_config:
-  sample_episodes: 100
+  sample_episodes: 128
   rssm_dataset_path_train: "Doom4RSSMs/train"
-  train_steps: 1000
-  train_batch: 64
-  burn_in: 20
+  train_steps: 500
+  train_batch: 32
+  burn_in: 15
   free_nats: 1.0
 
   min_buckets: -20
@@ -52,11 +52,11 @@ rssm_config:
   a_cont: 1.0
   a_rew: 1.0
 
-  detterministic_latent_dim: 1024 
-  rssm_latent_dim: 256 
-  common_latent_dim: 256
-  stochastic_latent: 16
-  stochastic_classes: 16
+  detterministic_latent_dim: 3072 
+  rssm_latent_dim: 384 
+  common_latent_dim: 384
+  stochastic_latent: 24
+  stochastic_classes: 24
   batch_acc: 1
   buckets: 255
   unimix: 0.01
@@ -64,17 +64,17 @@ rssm_config:
   beta_dyn: 1.0
   beta_pred: 1.0
   beta_rep: 0.1
-  
-  lr: 0.0004
+  lr:  0.00004  # 0.00004 
+
 policy_config:
-  sample_episodes: 100
-  train_steps: 1000
+  sample_episodes: 128
+  train_steps: 100
   buckets: 255
-  horizon: 15
-  burn_in: 20
-  lr: 0.0004
-  actor_entropy: 0.004  # aumentata da 0.00005
-  train_batch: 64
+  horizon: 14
+  burn_in: 15
+  lr: 0.00004 # 0.00004
+  actor_entropy: 0.0003  # aumentata da 0.00005
+  train_batch: 32
   batch_acc: 1
   hidden_dim: 128
   unimix: 0.01

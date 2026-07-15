@@ -239,7 +239,7 @@ class Dreamer(L.LightningModule):
         l_dyn_bt  = loss_dynamic(q_logits, p_logits, unimix=self.unimix, mask=mask)
         l_rep_bt  = loss_representation(q_logits, p_logits, mask=mask, unimix=self.unimix)
         #######################################################################################
-
+        
         if self.free_nats > 0:
             l_dyn_bt = torch.maximum(l_dyn_bt, torch.tensor(self.free_nats, device=l_dyn_bt.device))
             l_rep_bt = torch.maximum(l_rep_bt, torch.tensor(self.free_nats, device=l_rep_bt.device))
@@ -361,32 +361,25 @@ class Dreamer(L.LightningModule):
         
             
     def training_step(self, batch, batch_idx):
-        
-        # indexs need to update PER buffer not require tensor
         priority_idx = batch["priority_idx"].detach().cpu().numpy()
-
-        # masks not required grads
-        batch["mask_action"] =  batch["mask_action"]
-        batch["mask"] = batch["mask"]
-        #####################################################
-
-        # use internal symlog normalization
         batch["obs"] = batch["obs"].float()
-       
-        is_first = batch["is_first"] # [B] Tensor bool
-        
-        if batch["obs"].shape[1] > self.burn_in:
-            # 1. Burn Data: prendiamo sempre i primi 'burn_in' frame
+        is_first = batch["is_first"] 
+
+        if self.burn_in > 0:
+            # 1. Burn Data: prendiamo sempre i primi 'burn_in' frame per il warm-up
             burn_data = {
-                "obs": batch["obs"][:, :self.burn_in],
-                "action": batch["action"][:, :self.burn_in],
+                "obs":      batch["obs"][:, :self.burn_in],
+                "action":   batch["action"][:, :self.burn_in],
                 "user_att": batch["user_att"][:, :self.burn_in],
-                "mask": batch["mask"][:, :self.burn_in]
+                "mask":     batch["mask"][:, :self.burn_in]
             }
             
             T_total = batch["obs"].shape[1]
             T_train = T_total - self.burn_in
             
+            # 2. Train Data con select_data:
+            # Se is_first=True -> train_data = batch[:, :T_train] (inizia da 0)
+            # Se is_first=False -> train_data = batch[:, burn_in:] (inizia dopo il burn-in)
             train_data = {
                 "obs":      select_data(batch["obs"], is_first, self.burn_in, T_train),
                 "action":   select_data(batch["action"], is_first, self.burn_in, T_train),
@@ -394,45 +387,31 @@ class Dreamer(L.LightningModule):
                 "mask":     select_data(batch["mask"], is_first, self.burn_in, T_train),
                 "continue": select_data(batch["continue"], is_first, self.burn_in, T_train),
                 "reward":   select_data(batch["reward"], is_first, self.burn_in, T_train),
-                "is_first": is_first, # Passalo al forward per il reset dello stato
+                "is_first": is_first, 
                 "weight":   batch["weight"]
             }
         else:
             train_data = batch
             burn_data = None
-            
 
         out = self.forward(train_data, burn_data)
         
-        # compute model loss
-        
-        loss_batch, components = self.compute_loss(
-            out, 
-            train_data
-        )
+        # Calcolo Loss (su train_data che ora include gli step iniziali se is_first)
+        loss_batch, components = self.compute_loss(out, train_data)
 
-        # add PER weights to remove sampling bias
         weights = train_data["weight"]
-
-       
-        loss = (loss_batch * weights).mean() #[1]
+        loss = (loss_batch * weights).mean()
         
-        # logging
-        self.log_dict(components,    prog_bar=False, on_step=True, on_epoch=False)
+        # Logging...
+        self.log_dict(components, prog_bar=False, on_step=True, on_epoch=False)
         self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=False)
-        self.log("PER_weights", weights.detach().mean(), prog_bar=True, on_step=True, on_epoch=False)
-        self.log("train_loss(BIAS)", loss_batch.detach().mean(), prog_bar=True, on_step=True, on_epoch=False)
-        
 
-        
-
-        # ouput train step
         return {
             "loss": loss,
             "episodes_idx": priority_idx,
             "episodes_loss": loss_batch.detach().cpu().numpy(),
             "x_hat": out["x_hat"][0].detach().cpu(),
-            "x": batch["obs"][0].detach().cpu()
+            "x": train_data["obs"][0].detach().cpu() # Logghiamo obs di train_data
         }
     
     @torch.no_grad()
@@ -450,14 +429,16 @@ class Dreamer(L.LightningModule):
     
 
 
-    
+    def on_train_start(self):
+        self.unfreeze()
+        self.rssm.unfreeze()
     
     def forward(self, train_data, burn_in_data=None) -> Dict[str, torch.Tensor]:
         obs      = train_data["obs"]
         actions  = train_data["action"]
         att_user = train_data["user_att"]
         mask     = train_data["mask"]
-        is_first = train_data["is_first"]   # [B]
+        is_first = train_data["is_first"]   # [B] Tensor booleano
 
         B, T   = obs.shape[0], obs.shape[1]
         device = obs.device
@@ -467,12 +448,18 @@ class Dreamer(L.LightningModule):
         
         h_dim = self.rssm.h_dim
         L, K  = self.rssm.L, self.rssm.K
+
+        # --- 1. Fase di Burn-in Dinamico (Rispetta il Padding) ---
         if burn_in_data is not None:
             with torch.no_grad():
                 for t in range(burn_in_data["obs"].shape[1]):
+                    # Maschera al tempo t: 1 = informazione, 0 = padding
+                    m_t = burn_in_data["mask"][:, t].unsqueeze(-1) # [B, 1]
+                    
                     x_t, att_t = self.encode(burn_in_data["obs"][:, t], burn_in_data["user_att"][:, t])
                     a_t = self.encode_action(last_action)
                     
+                    # Calcolo del prossimo stato potenziale
                     state, _, _ = self.rssm.observe_step(
                         state, 
                         a_t, 
@@ -480,22 +467,22 @@ class Dreamer(L.LightningModule):
                         att_t, 
                         burn_in_data["mask"][:, t]
                     )
-                    last_action = burn_in_data["action"][:, t]
-       
-                state, last_action = self._apply_episode_reset(state, last_action, is_first)
-        # ── Allocazione buffer ─────────────────────────────────────────────
-        
-        
+                    
+                    
+                    # Aggiorniamo l'azione solo se il frame corrente era valido
+                    last_action = torch.where(m_t.bool(), burn_in_data["action"][:, t], last_action)
 
+        # --- 2. Risoluzione Conflitto is_first ---
+        # Se is_first è True, la sequenza di training è l'inizio di un episodio (t=0).
+        # Resettiamo lo stato a 'fresh' ignorando qualsiasi riscaldamento precedente.
+        state, last_action = self._apply_episode_reset(state, last_action, is_first)
+       
+        # --- 3. Fase di Training (Loop Principale) ---
         post_h       = torch.zeros(B, T, h_dim, device=device)
         post_logits  = torch.zeros(B, T, L, K,  device=device)
         prior_logits = torch.zeros(B, T, L, K,  device=device)
         post_z       = torch.zeros(B, T, L*K , device=device)
 
-       
-
-        
-        # ── Loop principale ────────────────────────────────────────────────
         for t in range(T):
             x_t, att_t = self.encode(obs[:, t], att_user[:, t])
             a_t = self.encode_action(last_action)
@@ -508,26 +495,21 @@ class Dreamer(L.LightningModule):
 
             last_action = actions[:, t]
 
-
-        # encode memory and stochastic    
+        # --- 4. Predizioni Finali ---
         s_t = self.encode_state(post_h, post_z) 
-
         
-        # predict world attributes ####################################################
-        x_hat                   = self.predict_obs(s_t)             # latent space              
-        r_hat_logits, _            = self.predict_reward(s_t)             # twohot(symlog)
-        att_hat                 = self.predict_user_att(s_t)                # symlog
-        c                = self.predict_continue(s_t).squeeze(-1)   # linear (probs)
-        ###############################################################################
+        x_hat        = self.predict_obs(s_t)             
+        r_hat_log, _ = self.predict_reward(s_t)             
+        att_hat      = self.predict_user_att(s_t)                
+        c            = self.predict_continue(s_t).squeeze(-1)   
 
         return {
             "x_hat": x_hat,
-            #"r_hat": r_hat, note need for regression task
             "c": c,
             "post_logits": post_logits,
             "prior_logits": prior_logits,
             "att_hat": att_hat,
-            "buckets_log": r_hat_logits
+            "buckets_log": r_hat_log
         }
 
 

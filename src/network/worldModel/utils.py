@@ -45,24 +45,25 @@ def _unitwise_norm(x):
     # Per i pesi convoluzionali o lineari, calcoliamo la norma per ogni unità di output
     return x.norm(2, dim=tuple(range(1, x.ndim)), keepdim=True)
 
+@torch.no_grad()
 def AGC(parameters, clip_factor=0.01, eps=1e-3):
     for p in parameters:
-        if p.grad is None:
+        if p.grad is None or p.ndim < 2: # Escludiamo bias e parametri 1D
             continue
+            
         p_data = p.detach()
         g_data = p.grad.detach()
         
         p_norm = _unitwise_norm(p_data).clamp_(min=eps)
         g_norm = _unitwise_norm(g_data)
         
-       
         max_norm = p_norm * clip_factor
         
-        
+        # Applichiamo il clipping solo dove la norma del gradiente supera la soglia
         trigger = g_norm > max_norm
+        scaled_g = g_data * (max_norm / g_norm.clamp(min=eps))
         
-        scaled_g = g_data * (max_norm / g_norm.clamp(min=1e-6))
-        p.grad.data.copy_(torch.where(trigger, scaled_g, g_data))
+        p.grad.copy_(torch.where(trigger, scaled_g, g_data))
 
 
 def image_loss(x_logits, x_target):
@@ -81,12 +82,14 @@ def loss_prediction(x_hat, x, r_hat, r, c_hat, c, att_hat, att, mask=None,
     loss_c = F.binary_cross_entropy(c_hat, c, reduction='none')
     # 2. Reward Loss  
 
-    loss_r = reward_loss(r_hat, r, mask)
-    loss_att = symlog_loss(att_hat, att, mask)
+    loss_r = reward_loss(r_hat, r, None)
+    loss_att = symlog_loss(att_hat, att, None)
 
     if mask is not None:
-         loss_c = loss_c * mask
          loss_x = loss_x * mask
+         loss_c = loss_c * mask
+         loss_r = loss_r * mask
+         loss_att = loss_att * mask
     
     
     

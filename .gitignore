@@ -218,3 +218,5 @@ src/.vscode
 src/.per
 src/Doom4RSSMs
 src/Project
+src/Doom4RSSMg/
+src/Project_*/
