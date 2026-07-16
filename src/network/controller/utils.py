@@ -43,7 +43,6 @@ def symexp(x):
 # utils.py modificato
 # Sostituisci la tua funzione lambda_returns in utils.py
 @torch.no_grad()
-@torch.no_grad()
 def lambda_returns(rewards, expected_values, execution_mask, gamma=0.997, lam=0.95):
     """
     rewards: [B, T]

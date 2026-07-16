@@ -316,13 +316,23 @@ class DreamerAgent(L.LightningModule):
                     burning_rssm_state, last_action_imag = self._apply_episode_reset(
                         rssm_state, last_action, is_first
                     )
+
+                    current_imag_rssm_state = RSSMState(
+                        h=burning_rssm_state.h.clone(),
+                        z=burning_rssm_state.z.clone()
+                    )
+
+
                     
-                    z_flat_imag = burning_rssm_state.z.flatten(1)
-                    s_imag = self.dreamer_model.encode_state(burning_rssm_state.h, z_flat_imag)
                     
-                    # Salva lo stato pronto per la policy
-                    current_imag_rssm_state = burning_rssm_state
-                    current_imag_s = s_imag
+                    current_imag_rssm_state = RSSMState(
+                        h=burning_rssm_state.h.clone(),
+                        z=burning_rssm_state.z.clone()
+                    )
+                    
+                    z_flat_imag = current_imag_rssm_state.z.flatten(1)
+                    current_imag_s = self.dreamer_model.encode_state(current_imag_rssm_state.h, z_flat_imag)
+                    last_action_imag = last_action_imag.clone()
                     
 
             # Caso limite: burn_in a 0
