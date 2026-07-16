@@ -16,23 +16,26 @@ class Wrapper_vz_basic(gym.Wrapper):
     def step(self, action):
         game = self.env.unwrapped.game
         
-        # 1. Controlliamo le munizioni PRIMA dell'azione
+        # 1. Track ammo before action to neutralize the native shoot penalty
         state_before = game.get_state()
         ammo_before = 0
         if state_before is not None:
             ammo_before = game.get_game_variable(zd.GameVariable.AMMO2)
             
-        # 2. Eseguiamo lo step
+        # 2. Perform step in the environment
         obs, reward, terminated, truncated, info = self.env.step(action)
         
-        # 3. Controlliamo le munizioni DOPO l'azione per correggere il reward
+        # 3. Time penalty to prevent the agent from idling (encourages speed)
+        reward -= 0.01
+        
+        # 4. Compensate the native -5 shooting penalty to stabilize training
         state_after = game.get_state()
         if state_after is not None:
             ammo_after = game.get_game_variable(zd.GameVariable.AMMO2)
             if ammo_after < ammo_before:
-                reward += 4.5  # Compensa esattamente la penalità nativa di -5
+                reward += 4.5  # Neutralizes native penalty down to a mild -0.5
         
-        # 4. Calcoliamo la distanza per il reward denso
+        # 5. Calculate dense distance-based reward delta
         current_distance = self._get_distance_to_target()
         
         if current_distance is not None and self.prev_distance is not None:

@@ -4,16 +4,16 @@ PER_config:
 
 global_config:
   multi_cpu: 24
-  max_episode_length: 600
+  max_episode_length: 300
   warmup: 4
-  Project_logs: "dreamerv0.2"
+  Project_logs: "dreamerv0.3"
   action_shape: 24
   att_shape: 7
   skip_frame: 4
   img_channels: 3
   img_size_h : 64
   img_size_l : 64
-  dreamer_iterations: 128
+  dreamer_iterations: 64
   dreamer_w: "weights/rssm/rssm.ckpt"
   policy_w : "weights/policy/policy.ckpt"
   chunk: 64
@@ -65,16 +65,16 @@ rssm_config:
   beta_dyn: 1.0
   beta_pred: 1.0
   beta_rep: 0.1
-  lr:  0.00004  # 0.00004 
+  lr:  0.0001  # 0.00004 
 
 policy_config:
   sample_episodes: 128
   train_steps: 128
   buckets: 255
-  horizon: 15
+  horizon: 10
   burn_in: 15
-  lr: 0.00004 # 0.00004
-  actor_entropy: 0.00005  # aumentata da 0.00005
+  lr: 0.0001 # 0.00004
+  actor_entropy: 0.001  # aumentata da 0.00005
   train_batch: 32
   batch_acc: 1
   hidden_dim: 128

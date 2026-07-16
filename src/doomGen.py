@@ -175,8 +175,8 @@ if __name__ == "__main__":
             game_info = game_info_next
             ids      += 1
             
-        episode_done += 1 if bool(terminated) else 0
-        logger.info("end episode %i with status %i", episode_cc, terminated)
+        episode_done += (1 - truncated)
+        logger.info("end episode %i with status %i", episode_cc, (1 - truncated))
 
         
         

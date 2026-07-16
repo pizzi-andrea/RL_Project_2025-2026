@@ -24,5 +24,5 @@ for idx in "${!episodes[@]}"; do
     --resolution_w 64 \
     --crop \
     $CURRENT_STICKY \
-    -t 600
+    -t 300
 done
