@@ -44,10 +44,14 @@ class EpisodicDoomDataset(Dataset):
         # get length of episode
         total_frames = len(pd.read_csv(episode_path_m, usecols=[0]))
         
-        # define chunck
+        # define chunck 
+        # update force 10% start by initial frame
         if total_frames > self.chunk_size:
-            start = np.random.randint(0, total_frames - self.chunk_size)
-            # skiprows=0 è l'header, quindi saltiamo da 1 a start
+            if np.random.rand() < 0.10:
+                start = 0
+            else:
+                start = np.random.randint(0, total_frames - self.chunk_size)
+            
             skip = range(1, start + 1) 
             n_rows = self.chunk_size
         else:
