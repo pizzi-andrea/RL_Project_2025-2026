@@ -43,31 +43,27 @@ def symexp(x):
 # utils.py modificato
 # Sostituisci la tua funzione lambda_returns in utils.py
 @torch.no_grad()
+@torch.no_grad()
 def lambda_returns(rewards, expected_values, execution_mask, gamma=0.997, lam=0.95):
     """
     rewards: [B, T]
     expected_values: [B, T+1] (contiene il frame finale di bootstrap)
-    execution_mask: [B, T]
+    execution_mask: [B, T] (Probabilità 'continue' o maschera reale)
     """
-    # 1. Mascheriamo SOLO i rewards perché condividono la stessa dimensione T
-    rewards = rewards * execution_mask
-    
     returns = torch.zeros_like(expected_values)
     
-    # 2. Bootstrap finale (preso dal frame T+1)
+    # 1. Bootstrap finale (preso dal frame T+1)
     last_ret = expected_values[:, -1]
     returns[:, -1] = last_ret 
     
-    # 3. Propagazione a ritroso
+    # 2. Propagazione a ritroso
     for t in reversed(range(expected_values.shape[1] - 1)):
+        # Il target futuro si calcola mixando il valore atteso e il ritorno precedente
         target = (1 - lam) * expected_values[:, t + 1] + lam * last_ret
         
-        # execution_mask decide se calcolare il futuro (1) o fermarsi (0)
+        # LA SOLUZIONE: execution_mask moltiplica SOLO il target futuro.
+        # La reward corrente rimane intatta, sia essa +1, -10 o 0.
         returns[:, t] = rewards[:, t] + gamma * execution_mask[:, t] * target
-        
-        # Pulizia rigorosa: se eravamo nel padding, l'intero return a questo step diventa 0.
-        # Questo azzera automaticamente anche i target "sporchi" arrivati da expected_values.
-        returns[:, t] = returns[:, t] * execution_mask[:, t]
         
         last_ret = returns[:, t]
         

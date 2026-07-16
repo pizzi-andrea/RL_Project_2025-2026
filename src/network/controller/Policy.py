@@ -62,7 +62,7 @@ class DreamerAgent(L.LightningModule):
     def update_target(self):
         with torch.no_grad():
             for p, p_target in zip(self.critic.parameters(), self.target.parameters()):
-                p_target.data.mul_(0.98).add_(0.03* p.data)
+                p_target.data.mul_(0.98).add_(0.02 * p.data)
 
     def configure_optimizers(self):
         params = list(self.actor.parameters()) + list(self.critic.parameters())

@@ -3,10 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import lightning as L
 import numpy as np
-class VAEAdapter(nn.Module):
-    def __init__(self, vae):
+class Adapter(nn.Module):
+    def __init__(self, encoder):
         super().__init__()
-        self.vae = vae
+        self.encoder = encoder
     
 
 class PERAdapter(L.Callback):
@@ -27,14 +27,14 @@ class PERAdapter(L.Callback):
 
 
         
-class VAEEncoderAdapter(VAEAdapter):
+class EncoderAdapter(Adapter):
     """
     Prende immagini [B,T,3,H,W] o [B,3,H,W] e ritorna enc_x.
-    Qui enc_x = mean del VAE (deterministico).
-    Gestisce la proiezione se la dimensione del latent del VAE differisce dalla dimensione richiesta (es. model_dim).
+    Qui enc_x = mean del encoder (deterministico).
+    Gestisce la proiezione se la dimensione del latent del encoder differisce dalla dimensione richiesta (es. model_dim).
     """
-    def __init__(self, vae):
-        super().__init__(vae)
+    def __init__(self, encoder):
+        super().__init__(encoder)
         
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -44,15 +44,15 @@ class VAEEncoderAdapter(VAEAdapter):
             
             x = x.reshape(B * T, C, H, W)
             
-            feat = self.vae.encode(x)  
+            feat = self.encoder.encode(x)  
 
             return feat.view(B, T, -1)
         else:
-            feat = self.vae.encode(x)
+            feat = self.encoder.encode(x)
            
             return feat
 
-class VAEDecoderAdapter(VAEAdapter):
+class DecoderAdapter(Adapter):
     def __init__(self, decoder_module):
         # Assumiamo che decoder_module sia un'istanza della classe Decoder definita prima
         super().__init__(decoder_module)
@@ -65,10 +65,10 @@ class VAEDecoderAdapter(VAEAdapter):
             feat_flat = feat.reshape(B * T, D) 
             
             # 2. Decodifica (Output: [B*T, 3, 64, 64])
-            imgs = self.vae.decode(feat_flat) 
+            imgs = self.encoder.decode(feat_flat) 
             
             # 3. Ripristino dimensione temporale
             return imgs.view(B, T, 3, self.res[0], self.res[1])
         else:
             # Caso batch singolo senza tempo [B, D]
-            return self.vae.decode(feat)
+            return self.encoder.decode(feat)

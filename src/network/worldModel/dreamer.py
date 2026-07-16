@@ -1,5 +1,6 @@
 import torchvision
-from ..encoder.VAE import VAE, Decoder
+from ..encoder.encoders import Encoder 
+from ..encoder.decoders import Decoder
 from typing import Dict
 from timm.optim.laprop import LaProp
 import torch
@@ -10,7 +11,6 @@ import lightning as L
 from typing import Optional
 
 # Vision Encoders
-from ..encoder.VAE import VAE
 # RNN network
 from ..dreamer.rssm import RSSM, RSSMState
 from .utils import *
@@ -45,11 +45,11 @@ class Dreamer(L.LightningModule):
         
         unimix: float = 0.01,
        
-        vae: Optional[str]|VAE|None = None,
+        encoder = None,
         decoder: Optional[str]|Decoder|None = None
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=['vae'])
+        self.save_hyperparameters(ignore=['encoder'])
         self.min_buckets = min_buckets
         self.max_buckets = max_buckets
         self.free_nats = free_nats
@@ -78,31 +78,31 @@ class Dreamer(L.LightningModule):
         self.burn_in = burn_in
         self.unimix = unimix
 
-        if isinstance(vae, str):
-            self.vae = VAE.load_from_checkpoint(vae, map_location='cpu')
-        elif isinstance(vae, VAE):
-            self.vae = vae
-        elif not vae:
-            self.vae = VAE(model_dim=self.internal_hidden_dim, latent_dim=internal_hidden_dim, rssm_state_dim=self.rssm.hidden_dim)
+        if isinstance(Encoder, str):
+            self.encoder = Encoder.load_from_checkpoint(encoder, map_location='cpu')
+        elif isinstance(encoder, Encoder):
+            self.encoder = encoder
+        elif not encoder:
+            self.encoder = Encoder(model_dim=self.internal_hidden_dim, latent_dim=internal_hidden_dim, rssm_state_dim=self.rssm.hidden_dim)
         else:
-            assert "No VAE instance"
+            assert "No encoder instance"
 
         
         if isinstance(decoder, str):
-            self.decoder = Decoder.load_from_checkpoint(vae, map_location='cpu')
+            self.decoder = Decoder.load_from_checkpoint(encoder, map_location='cpu')
         elif isinstance(decoder, Decoder):
             self.decoder = decoder
         elif not decoder:
-            self.decoder = Decoder(model_dim=self.internal_hidden_dim, world_model_dim=self.rssm.hidden_dim, input_res=self.vae.input_res)
+            self.decoder = Decoder(model_dim=self.internal_hidden_dim, world_model_dim=self.rssm.hidden_dim, input_res=self.encoder.input_res)
         else:
-            assert "No VAE instance"
+            assert "No encoder instance"
 
         
-        # -- VAE encoders adapter
-        self.encoder = VAEEncoderAdapter(self.vae)
+        # -- encoders adapter
+        self.encoder = EncoderAdapter(self.encoder)
 
-        # -- VAE decoder adapter
-        self.decoder = VAEDecoderAdapter(self.decoder)
+        # -- decoder adapter
+        self.decoder = DecoderAdapter(self.decoder)
 
         self.att_encoder = nn.Sequential(
             nn.Linear(att_dim, internal_hidden_dim*2),

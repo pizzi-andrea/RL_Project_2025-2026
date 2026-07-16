@@ -15,7 +15,7 @@ from utils import *
 from dda import DynamicDataAllocator
 from env_adapter import EnviromentAdapter
 from network.controller.Policy import DreamerAgent
-from network.encoder.VAE import VAE
+from network.encoder.encoders import Encoder 
 from network.worldModel.dreamer import Dreamer
 from network.adapters import PERAdapter
 from torchvision.transforms.v2 import *
@@ -129,10 +129,8 @@ def main():
         precision=config["global_config"]["precision"],
     )
     
-    #if args.load_weights and Path(config["global_config"]["vae_w"]).exists():
-        #vae_model = VAE.load_from_checkpoint(config["global_config"]["vae_w"])
-    #else:
-    vae_model = VAE(latent_dim=config["vae_config"]["latent_dim"], model_dim=config["vae_config"]["model_dim"])
+  
+    encoder_model = Encoder(latent_dim=config["encoder_config"]["latent_dim"], model_dim=config["encoder_config"]["model_dim"])
    
         
     if args.load_weights and Path(config["global_config"]["dreamer_w"]).exists():
@@ -144,7 +142,7 @@ def main():
                 beta_dyn            =   config["rssm_config"]["beta_dyn"],
                 beta_pred           =   config["rssm_config"]["beta_pred"],
                 beta_rep            =   config["rssm_config"]["beta_rep"],
-                #vae                 =   vae_model,
+             
                 burn_in             =    config["rssm_config"]["burn_in"],
                 free_nats           =   config["rssm_config"]["free_nats"],
                 unimix              =   config["rssm_config"]["unimix"],
@@ -172,7 +170,7 @@ def main():
                 beta_dyn            =   config["rssm_config"]["beta_dyn"],
                 beta_pred           =   config["rssm_config"]["beta_pred"],
                 beta_rep            =   config["rssm_config"]["beta_rep"],
-                vae                 =   vae_model,
+                encoder                 =   encoder_model,
                 burn_in             =    config["rssm_config"]["burn_in"],
                 free_nats           =   config["rssm_config"]["free_nats"],
                 unimix              =   config["rssm_config"]["unimix"],
