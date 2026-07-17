@@ -129,7 +129,7 @@ class EpisodicDoomDataset(Dataset):
         }
 
         if self.preprocessor is not None:
-            
+            #print(sampled_episode["obs"].shape)
             sampled_episode["obs"] = self.preprocessor(sampled_episode["obs"])
 
         if self.per_weights is not None:

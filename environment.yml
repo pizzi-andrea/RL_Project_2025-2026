@@ -4,7 +4,7 @@ channels:
   - defaults
   - conda-forge
 dependencies: # conda dependences
-  - python=3.14
+  - python=3.12
   - pip
   - opencv
   - pip: # packages

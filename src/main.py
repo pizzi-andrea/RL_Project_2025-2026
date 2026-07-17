@@ -23,7 +23,7 @@ from torchvision.transforms.v2 import *
 from priority_functions import *
 import warnings
 
-from lightning.pytorch.callbacks import Callback
+
 from lightning.pytorch.callbacks import RichProgressBar
 
 
@@ -45,8 +45,7 @@ def main():
     obs_size = (config["global_config"]["img_size_h"], config["global_config"]["img_size_l"])
     
     # == set processor functions
-    simpler_preprocessor=   ObservationTransformation(obs_size, format='pt', norm=True)
-    simpler_postprocessor = ObservationTransformation(obs_size, format='np', norm=False)
+  
     # ============================
     
     # == set log path
@@ -200,7 +199,7 @@ def main():
         rssm_model = torch.compile(rssm_model, mode="reduce-overhead")
 
     log.info(f"Total steps for DREAMER: {config['rssm_config']['sample_episodes']/config['rssm_config']['train_batch']}")
-    lof.info(f"Total steps for Policy: {config['policy_config']['sample_episodes']/config['policy_config']['train_batch']}")
+    log.info(f"Total steps for Policy: {config['policy_config']['sample_episodes']/config['policy_config']['train_batch']}")
     
     for epoch in range(1, config["global_config"]["dreamer_iterations"] + 1):
         log.info(f"Start epoch iteration {epoch}/{config['global_config']['dreamer_iterations']}")
@@ -217,7 +216,7 @@ def main():
                 att_name=DoomNames.att_player_names,
                 action_name=DoomNames.buttons_names,
                 per_weights=weights,
-                preprocessor=simpler_preprocessor,
+                preprocessor=ObservationTransformation(ft='pt'),
                 chunk_size=config["global_config"]["chunk"],
                 
             ),
@@ -243,7 +242,7 @@ def main():
                 action_name=DoomNames.buttons_names,
                 per_weights=weights,
                 chunk_size=config["global_config"]["chunk"],
-                preprocessor=simpler_preprocessor,
+                preprocessor=ObservationTransformation(ft='pt'),
             ), 
             batch_size=config["policy_config"]["train_batch"], 
             shuffle=True, 
@@ -257,7 +256,7 @@ def main():
             policy_trainer.fit(agent_model, train_dataloaders=policy_train_loader)
         
             for env, n in zip(config["global_config"]["envs"], config["global_config"]["envs_episodes"]):
-                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=config["global_config"]["skip_frame"], max_length=config["global_config"]["max_episode_length"], preprocess=simpler_preprocessor, post_process=simpler_postprocessor)
+                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=config["global_config"]["skip_frame"], max_length=config["global_config"]["max_episode_length"], preprocess=ObservationTransformation(ft='pt'), post_process=ObservationTransformation(obs_size=(64,64)))
                 log.info(f"mean reword collected by policy {reword} in env {env}")
                 create_video_from_frames(best_path.joinpath("obs"), validation_log.joinpath(f"{env}_{epoch}.mp4"), 15) # save best video
                 

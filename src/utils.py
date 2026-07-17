@@ -1,9 +1,10 @@
 import logging
-
+import torch 
+import numpy as np
 import cv2 as cv
 import os
 from pathlib import Path
-
+from lightning.pytorch.callbacks import Callback
 def create_video_from_frames(input_folder, output_path, fps=30):
     """
     Legge i frame da una cartella e salva un video.
@@ -63,26 +64,23 @@ def configure_logger(process_name: str):
 
 class ObservationTransformation:
     """Simple utils to process obs"""
-    def __init__(self, obs_size:tuple[int, int], format:str='np', norm:bool=False):
+    def __init__(self, obs_size:tuple[int, int]|None = None, ft:str='np'):
         self.obs_size = obs_size
-        self.format = format
-    def __call__(self, x):
-        x = x[100:, 54:267]
-        x = cv.resize(x, self.obs_resize, interpolation=cv.INTER_NEAREST)
+        self.ft = ft
         
-        if format == 'pt':
+    def __call__(self, x):
+        if self.obs_size:
+            x = cv.resize(x, self.obs_size, interpolation=cv.INTER_NEAREST)
+        
+        if self.ft == 'pt':
             if len(x.shape) == 3:
                 x = x[np.newaxis,:,:,:]
             
             x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
-            if norm: 
-                x = (x.float().div_(255.0).detach())
+           
         
-        elif format == 'np':
-            if norm:
-                x =  x / 255.0
-        else:
-            raise ValueError(f"format {format} not recognize")
+        elif  self.ft == 'np':
+            pass
         
         return x
         

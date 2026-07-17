@@ -28,7 +28,9 @@ class DreamerAgent(L.LightningModule):
                  burn_in:int=3, 
                  unimix:float= 0.01, 
                  ema_decay:float= 0.98, 
-                 ema_epsilon:float= 1e-6, 
+                 ema_epsilon:float= 1e-6,
+                 lambd:float=0.95, 
+                 gamma:float=0.997,
                  lr=0.001, hidden_dim:int=1024, preprocess_callback=None):
         super().__init__()
         self.save_hyperparameters(ignore=['dreamer_model', 'preprocess_callback'])
@@ -47,7 +49,8 @@ class DreamerAgent(L.LightningModule):
         self.action_space_dim = action_space_dim
         self.horizon = horizon
         self.burn_in = burn_in
-
+        self.lambd = lambd
+        self.gamma = gamma
         # -- define EMA scaler (Mobile mean)
         self.ema = EMAScalar(ema_decay, ema_epsilon)
         
@@ -62,7 +65,7 @@ class DreamerAgent(L.LightningModule):
     def update_target(self):
         with torch.no_grad():
             for p, p_target in zip(self.critic.parameters(), self.target.parameters()):
-                p_target.data.mul_(0.97).add_(0.03 * p.data)
+                p_target.data.mul_(0.98).add_(0.02 * p.data)
 
     def configure_optimizers(self):
         params = list(self.actor.parameters()) + list(self.critic.parameters())
@@ -127,24 +130,28 @@ class DreamerAgent(L.LightningModule):
             # --- SCONTI TEMPORALI (Opzionali ma utili in Dreamer) ---
             # Combinano lo sconto temporale con la validità del frame
             discount_c = torch.cumprod(
-                torch.cat([torch.ones_like(c_hat[:, :1]), 0.997 * c_hat[:, :-1]], dim=1), dim=1
+                torch.cat([torch.ones_like(c_hat[:, :1]), self.gamma * c_hat[:, :-1]], dim=1), dim=1
             ) * valid_mask_imag
 
             discount_r = torch.cumprod(
-                torch.cat([torch.ones_like(continue_real[:, :1]), 0.997 * continue_real[:, :-1]], dim=1), dim=1
+                torch.cat([torch.ones_like(continue_real[:, :1]), self.gamma * continue_real[:, :-1]], dim=1), dim=1
             ) * valid_mask_real 
 
             # --- LAMBDA RETURNS (Uso di execution_mask) ---
             lambda_return = lambda_returns(
                 rewards=r_hat,
                 expected_values=v_hat_target,
-                execution_mask=exec_mask_imag
+                execution_mask=exec_mask_imag,
+                lam=self.lambd,
+                gamma=self.gamma
             )
 
             lambda_return_real = lambda_returns(
                 rewards=r_real,
                 expected_values=v_hat_target_real,
-                execution_mask=exec_mask_real
+                execution_mask=exec_mask_real,
+                lam=self.lambd,
+                gamma=self.gamma
             )
 
             two_hot_lambda_return = twohot(symlog(lambda_return), self.critic.buckets)

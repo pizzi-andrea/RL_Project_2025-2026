@@ -111,9 +111,11 @@ class EnviromentAdapter:
             # == init episode variables
             game, _ = env.reset()
             current_obs = game["screen"]
+            current_obs = current_obs[100:, 54:267]
             s = post_process(current_obs) if post_process is not None else current_obs
             att = mapper.stats_local2global(game["gamevariables"])
             act = mapper.action_local2global(0)
+            local_action_hot = [v for v in act.values()]
             ids = 0
             done = False
             r = 0.0
@@ -135,8 +137,8 @@ class EnviromentAdapter:
                 } | act | att               # a_{t-1} s_{t}
                 episode.append(transition)
                 
-                local_action, _ = self.act(
-                    s, list(att.values()), prev_action=act, 
+                local_action, local_action_hot = self.act(
+                    s, list(att.values()), prev_action=local_action_hot, 
                     mask_actions=mapper.act_mask, local_act_order=mapper._gym_action_names, preprocess=preprocess
                 )
                 
@@ -166,8 +168,8 @@ class EnviromentAdapter:
             episode.append(transition)
     
             # alloc new episode on the disk
-            episode_path = self.memory_m.alloc_episode(current_episode_buffer, **{"mask": mapper.act_mask})
-            current_episode_buffer.clear()
+            episode_path = self.memory_m.alloc_episode(episode, **{"mask": mapper.act_mask})
+            episode.clear()
             
             # accumulate values for metrics
             episode_rewards.append(total_reward)
