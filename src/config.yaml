@@ -5,7 +5,7 @@ PER_config:
 global_config:
   multi_cpu: 24
   max_episode_length: 300
-  warmup: 8
+  warmup: 16
   Project_logs: "dreamerv0.4"
   action_shape: 24
   att_shape: 7
@@ -41,7 +41,7 @@ curiosity_config:
 rssm_config:
   sample_episodes: 128
   rssm_dataset_path_train: "Doom4RSSMs/train"
-  train_steps: 128
+  train_steps: 320  
   train_batch: 32
   burn_in: 15
   free_nats: 1.0
@@ -66,17 +66,17 @@ rssm_config:
   beta_dyn: 1.0
   beta_pred: 1.0
   beta_rep: 0.1
-  lr:  0.0001  # 0.00004 
+  lr:  0.00004  # 0.00004 
 
 policy_config:
   sample_episodes: 128
   train_steps: 256
   buckets: 255
-  horizon: 10
+  horizon: 12
   burn_in: 15
-  lr: 0.0001 # 0.00004
-  actor_entropy: 0.001  # aumentata da 0.00005
-  train_batch: 32
+  lr: 0.00004 # 0.00004
+  actor_entropy: 0.00005  # aumentata da 0.00005
+  train_batch:  32
   batch_acc: 1
   hidden_dim: 128
   unimix: 0.01

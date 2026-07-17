@@ -388,12 +388,12 @@ class CuriosityReplayPriority(PriorityExperienceReplay):
         
         # 2. Novelty component (Saturation bonus)
         # Prevents the model from getting stuck on the same episodes
-        novelty_bonus = 1.0 / np.sqrt(self.count_buffer[priority_idx] + 1)
+        novelty_bonus = self.c / np.sqrt(self.count_buffer[priority_idx] + 1)
 
         # 3. Combine and Clip
         # Clipping is crucial to prevent a single outlier from ruining sampling distribution
         new_p = surprise * novelty_bonus
-        #new_p = np.clip(new_p, 0.01, 100.0) 
+        new_p = np.clip(new_p, 1e-8, self.base_pmax) 
 
         self.last_updates = priority_idx
 
@@ -406,8 +406,11 @@ class CuriosityReplayPriority(PriorityExperienceReplay):
         # 4. Stable PMAX update
         # We use a moving maximum or a clipped max to avoid PMAX explosion
         current_max = float(np.max(new_p))
-        # Smooth PMAX update to avoid sudden jumps
-        self.PMAX = 0.9 * self.PMAX + 0.1 * current_max
+       
+        if self.last_updates is None:
+            self.PMAX = current_max
+        else:
+            self.PMAX = 0.9 * self.PMAX + 0.1 * current_max
 
        
 

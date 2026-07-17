@@ -129,6 +129,7 @@ class EnviromentAdapter:
             # == main loop to collect a single episode (o_t, a_{t-1}, r_t})
             while not done:
                 #  transition
+                
                 transition = {
                     "obs":    s,            # o_{t}
                     "ids":    ids,          # t
@@ -150,6 +151,7 @@ class EnviromentAdapter:
                 done = terminated or truncated
                 
                 s = game_next["screen"]
+                s = s[100:, 54:267]
                 s = post_process(s) if post_process is not None else s
                 att = mapper.stats_local2global(game_next["gamevariables"])
                 

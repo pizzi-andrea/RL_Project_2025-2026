@@ -121,7 +121,9 @@ class DreamerAgent(L.LightningModule):
             # --- DEFINIZIONE MASCHERE ---
             # 1. Maschere per dati REALI (Hanno padding derivato dal batch)
             valid_mask_real = mask[:, :r_real.shape[1]] 
+            
             exec_mask_real = continue_real * valid_mask_real
+            exec_mask_real[:, -1] = 0
             
             # 2. Maschere per dati IMMAGINATI (Non hanno padding, orizzonte fisso)
             valid_mask_imag = torch.ones_like(c_hat)
@@ -224,22 +226,16 @@ class DreamerAgent(L.LightningModule):
         real = outputs["burn"]
         self.update_target()
     
-        obs = self.dreamer_model.predict_obs(obs)
-        real = (real / 255)
+        imagined_frames = torch.clamp(self.dreamer_model.predict_obs(obs), 0.0, 1.0)
 
-        burning = real[:self.burn_in]
-        end_frame = torch.zeros_like(burning[0]).unsqueeze(0)
-        if batch_idx == 0:
-            
-            comparison = torch.cat([burning, end_frame, obs], dim=0)
-            
-            grid = torchvision.utils.make_grid(
-                comparison, 
-                nrow=comparison.shape[0],
-                )
-            self.logger.experiment.add_image(
-                "imagination", grid, self.global_step
-            )
+        if batch_idx == 0 and self.logger is not None:
+            log_dir = self.logger.log_dir if (self.logger and hasattr(self.logger, 'log_dir')) else "."
+            make_video(imagined_frames, f"{log_dir}/imagined_{self.global_step}.avi", fps=10)
+
+            burning = (real[:self.burn_in] / 255)
+            comparison = torch.cat([burning, torch.zeros_like(burning[0]).unsqueeze(0), imagined_frames], dim=0)
+            grid = torchvision.utils.make_grid(comparison, nrow=comparison.shape[0])
+            self.logger.experiment.add_image("imagination_static_grid", grid, self.global_step)
    
     @torch.no_grad()
     def act(self, obs, att_user, old_act, rssm_state, mask_actions=None):

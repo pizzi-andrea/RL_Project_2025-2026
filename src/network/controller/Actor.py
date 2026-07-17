@@ -77,13 +77,8 @@ class Actor(nn.Module):
         dist = OneHotCategorical(logits=mixed_log_probs)
 
         # use different sampling strategy that depend by train phase
-        if self.training:
-            action = dist.sample() 
-        else:
-            index = mixed_probs.argmax(dim=-1, keepdim=True)
-            action = torch.zeros_like(mixed_probs).scatter_(-1, index, 1.0)
-
         
+        action = dist.sample() 
         log_prob = dist.log_prob(action)
         entropy = dist.entropy()
 
