@@ -218,7 +218,7 @@ class Dreamer(L.LightningModule):
         
         with torch.no_grad():
             user_att = symlog(user_att) # symlog target user attribute
-            obs = (obs / 255)             # imgs normalization
+            #obs = (obs / 255)             # imgs normalization
             
             two_hot_rewards = twohot(symlog(rewards), self.buckets)  # robust encoding for high variance prediction (rewards model)
         ######################################################################################
@@ -317,7 +317,7 @@ class Dreamer(L.LightningModule):
         pred_rewards_buckets_probs = self.softmax(pred_rewards_buckets_log)
 
         pred_rewards = symexp( (pred_rewards_buckets_probs * B).sum(dim=-1) )
-        return pred_rewards_buckets_log, pred_rewards.squeeze(-1)
+        return pred_rewards_buckets_log, pred_rewards
     
   
 
@@ -328,8 +328,7 @@ class Dreamer(L.LightningModule):
         logits = self.cont_head(feat).squeeze(-1)
         probs = torch.sigmoid(logits) 
         
-        # Per DreamerV3 standard (Loss Weighting), restituiamo la probabilità.
-        # Non usiamo STE qui perché vogliamo che la Loss sia pesata in modo differenziabile e soft.
+        
         return probs
     
     def predict_obs(self, s):
@@ -417,8 +416,7 @@ class Dreamer(L.LightningModule):
     @torch.no_grad()
     def on_train_batch_end(self, outputs, batch, batch_idx):
         
-        x_hat = outputs["x_hat"] # [B, C, H, W]
-        #x_hat = torch.sigmoid(outputs["x_hat"]) # [B, C, H, W]
+        x_hat = torch.sigmoid(outputs["x_hat"]) # [B, C, H, W]
         x = (outputs["x"] /255)
         
         

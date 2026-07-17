@@ -78,7 +78,6 @@ class ImpalaDecoder(L.LightningModule):
             ResidualBlock(d1),
             ResidualBlock(d1),
             nn.ConvTranspose2d(d1, 3, 4, stride=2, padding=1),
-            nn.Sigmoid() # Mantiene l'output normalizzato nell'intervallo [0, 1] per i pixel
         )
 
     def decode(self, z):
@@ -127,7 +126,6 @@ class ResNetDecoder(L.LightningModule):
             # Up-sample 3: 32x32 -> 64x64
             ResidualBlock(d1),
             nn.ConvTranspose2d(d1, 3, 4, stride=2, padding=1),
-            nn.Sigmoid()
         )
 
     def decode(self, z):
@@ -174,7 +172,6 @@ class Decoder(L.LightningModule):
             
             # Layer 3: Upsample finale (es. 80x60 -> 160x120 o 32x32 -> 64x64)
             nn.ConvTranspose2d(d1, 3, 4, stride=2, padding=1),
-            nn.Sigmoid() # Manteniamo la Sigmoid finale intatta come richiesto
         )
 
     def decode(self, z):

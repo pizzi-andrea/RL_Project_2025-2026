@@ -228,10 +228,12 @@ class DreamerAgent(L.LightningModule):
     
         imagined_frames = torch.clamp(self.dreamer_model.predict_obs(obs), 0.0, 1.0)
 
-        if batch_idx == 0 and self.logger is not None:
+        if  self.global_step % 100 == 0:
             log_dir = self.logger.log_dir if (self.logger and hasattr(self.logger, 'log_dir')) else "."
             make_video(imagined_frames, f"{log_dir}/imagined_{self.global_step}.avi", fps=10)
+            print(f"new video save in {log_dir}")
 
+        if batch_idx == 0 and self.logger is not None:
             burning = (real[:self.burn_in] / 255)
             comparison = torch.cat([burning, torch.zeros_like(burning[0]).unsqueeze(0), imagined_frames], dim=0)
             grid = torchvision.utils.make_grid(comparison, nrow=comparison.shape[0])

@@ -5,7 +5,7 @@ PER_config:
 global_config:
   multi_cpu: 24
   max_episode_length: 300
-  warmup: 16
+  warmup: 32
   Project_logs: "dreamerv0.4"
   action_shape: 24
   att_shape: 7
@@ -13,7 +13,7 @@ global_config:
   img_channels: 3
   img_size_h : 64
   img_size_l : 64
-  dreamer_iterations: 64
+  dreamer_iterations: 128
   dreamer_w: "weights/rssm/rssm.ckpt"
   policy_w : "weights/policy/policy.ckpt"
   chunk: 64
@@ -32,11 +32,11 @@ encoder_config:
   model_dim: 384
 
 curiosity_config:
-  alpha: 0.3
-  beta: 0.1
+  alpha: 0.5       # Abbassa leggermente per ridurre l'impatto di loss grandi (>1)
+  beta: 0.4       
   eps: 0.000001
-  p_max: 1
-  c: 0.1
+  p_max: 30        # ALZA il tetto massimo! Lascia che le priorità salgano oltre l'1
+  c: 0.01          # Mantieni la novità bassa per non saturare     
 
 rssm_config:
   sample_episodes: 128

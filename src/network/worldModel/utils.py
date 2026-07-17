@@ -67,8 +67,8 @@ def AGC(parameters, clip_factor=0.01, eps=1e-3):
 
 
 def image_loss(x_logits, x_target):
-    return F.mse_loss(x_logits, x_target, reduction='none') \
-             .sum(dim=[-3, -2, -1]) * 0.5
+    x_target = x_target /255
+    return F.binary_cross_entropy_with_logits(x_logits, x_target, reduction='none').mean(dim=[-3, -2, -1])
 
 
 def loss_prediction(x_hat, x, r_hat, r, c_hat, c, att_hat, att, mask=None, 
@@ -77,7 +77,7 @@ def loss_prediction(x_hat, x, r_hat, r, c_hat, c, att_hat, att, mask=None,
     Prediction loss (eq x. paper)
     """
     # loss for observation (graphical)
-    #x_hat = F.sigmoid(x_hat)
+   
     loss_x = image_loss(x_hat, x)
     loss_c = F.binary_cross_entropy(c_hat, c, reduction='none')
     # 2. Reward Loss  

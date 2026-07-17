@@ -387,13 +387,12 @@ class CuriosityReplayPriority(PriorityExperienceReplay):
         surprise = (np.abs(losses) + self.eps) ** self.alpha
         
         # 2. Novelty component (Saturation bonus)
-        # Prevents the model from getting stuck on the same episodes
         novelty_bonus = self.c / np.sqrt(self.count_buffer[priority_idx] + 1)
 
-        # 3. Combine and Clip
-        # Clipping is crucial to prevent a single outlier from ruining sampling distribution
-        new_p = surprise * novelty_bonus
-        new_p = np.clip(new_p, 1e-8, self.base_pmax) 
+        # 3. COMBINAZIONE ADDITIVA (Corretto)
+        # Ora la sorpresa e la novità cooperano senza annullarsi a vicenda
+        new_p = surprise + novelty_bonus
+        new_p = np.clip(new_p, 1e-8, self.base_pmax)
 
         self.last_updates = priority_idx
 
