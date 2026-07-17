@@ -3,13 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 import lightning as L
 import numpy as np
+
 class Adapter(nn.Module):
+    """High level class for adapters class"""
     def __init__(self, encoder):
         super().__init__()
         self.encoder = encoder
     
-
 class PERAdapter(L.Callback):
+    """Unified interface class for PER"""
     def __init__(self, buffer):
         super().__init__()
         self.buffer_train = buffer
@@ -23,20 +25,14 @@ class PERAdapter(L.Callback):
         
         if batch_idx == 0:     
             self.buffer_train.info()
-       
-
-
-        
+           
 class EncoderAdapter(Adapter):
     """
-    Prende immagini [B,T,3,H,W] o [B,3,H,W] e ritorna enc_x.
-    Qui enc_x = mean del encoder (deterministico).
-    Gestisce la proiezione se la dimensione del latent del encoder differisce dalla dimensione richiesta (es. model_dim).
+    Unified interface for encoder module
     """
     def __init__(self, encoder):
         super().__init__(encoder)
         
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: [B,T,C,H,W] oppure [B,C,H,W]
         if x.dim() == 5:
@@ -53,6 +49,9 @@ class EncoderAdapter(Adapter):
             return feat
 
 class DecoderAdapter(Adapter):
+    """
+    Unified interface for decoder module
+    """
     def __init__(self, decoder_module):
         # Assumiamo che decoder_module sia un'istanza della classe Decoder definita prima
         super().__init__(decoder_module)

@@ -11,6 +11,10 @@ from torch.utils.data import Dataset
 from priority_functions import PriorityExperienceReplay
 
 class EpisodicDoomDataset(Dataset):
+    """
+    Custom dataset to handle dataset organized in episodes. 
+    """
+
     def __init__(self, 
                  episodes:list[str], 
                  per_indexs:list, 
@@ -22,7 +26,21 @@ class EpisodicDoomDataset(Dataset):
                  csv_name:str = "episode.csv", 
                  chunk_size:int=50
     ):
-        
+        """
+
+
+        Args:
+            episodes (list[str]): list of episode paths
+            per_indexs (list): list of priority indexes for each episode
+            obs_size (tuple[int,int]): size of the observation (height, width)
+            action_name (tuple[str]): names of the action columns in the CSV
+            att_name (tuple[str]): names of the attention columns in the CSV
+            per_weights (list[float]): list of priority weights for each episode
+            preprocessor (callable, optional): function to preprocess observations. Defaults to None.
+            csv_name (str, optional): name of the CSV file containing episode metadata. Defaults to "episode.csv".
+            chunk_size (int, optional): length of the training window. Defaults to 50.
+        """
+          
         super().__init__()
         self.preprocessor = preprocessor
         self.per_indexs = per_indexs

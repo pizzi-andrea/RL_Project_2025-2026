@@ -59,3 +59,51 @@ def configure_logger(process_name: str):
     )
     logger = logging.getLogger(process_name)
     return logger
+
+
+class ObservationTransformation:
+    """Simple utils to process obs"""
+    def __init__(self, obs_size:tuple[int, int], format:str='np', norm:bool=False):
+        self.obs_size = obs_size
+        self.format = format
+    def __call__(self, x):
+        x = x[100:, 54:267]
+        x = cv.resize(x, self.obs_resize, interpolation=cv.INTER_NEAREST)
+        
+        if format == 'pt':
+            if len(x.shape) == 3:
+                x = x[np.newaxis,:,:,:]
+            
+            x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
+            if norm: 
+                x = (x.float().div_(255.0).detach())
+        
+        elif format == 'np':
+            if norm:
+                x =  x / 255.0
+        else:
+            raise ValueError(f"format {format} not recognize")
+        
+        return x
+        
+       
+
+
+
+
+
+
+class StepLimitCallback(Callback):
+    """callback that stop traning procedure when reached expected train steps"""
+    def __init__(self, steps_per_round):
+        super().__init__()
+        self.steps_per_round = steps_per_round
+        self.batch_count = 0
+
+    def on_train_start(self, trainer, pl_module):
+        self.batch_count = 0
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        self.batch_count += 1
+        if self.batch_count >= self.steps_per_round:
+            trainer.should_stop = True

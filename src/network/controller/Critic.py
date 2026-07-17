@@ -9,6 +9,7 @@ class Critic(nn.Module):
 
         
         self.num_buckets = num_buckets
+        
         self.min_buckets = min_buckets
         self.max_buckets = max_buckets
 
@@ -49,9 +50,10 @@ class Critic(nn.Module):
         pred_values_log =  self.buckets_proj(x)
         pred_values_prob = self.softmax(pred_values_log)
 
-        # -- weighted mean
+        
         pred = symexp ( (pred_values_prob * self.buckets).sum(dim=-1) )
-    
+
+        # return both values in symlog and symexp(linear)
         return pred_values_log, pred
         
 

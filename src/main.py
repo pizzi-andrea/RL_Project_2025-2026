@@ -1,6 +1,6 @@
 import numpy as np
 import cv2 as cv
-
+import torch
 import argparse
 from pathlib import Path
 import torch
@@ -26,74 +26,33 @@ import warnings
 from lightning.pytorch.callbacks import Callback
 from lightning.pytorch.callbacks import RichProgressBar
 
-class StepLimitCallback(Callback):
-    def __init__(self, steps_per_round):
-        super().__init__()
-        self.steps_per_round = steps_per_round
-        self.batch_count = 0
-
-    def on_train_start(self, trainer, pl_module):
-        self.batch_count = 0
-
-    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        self.batch_count += 1
-        if self.batch_count >= self.steps_per_round:
-            trainer.should_stop = True
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pygame.pkgdata")
 warnings.filterwarnings("ignore", message="Detected screen format CRCGCB")
-
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
  # dataset preprocess
-def simple_preprocessor(x):
-    if len(x.shape) == 3:
-        x = x[np.newaxis,:,:,:]
-    x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
-    return x
 
-
-class SimplerPreprocessor:
-    def __init__(self, obs_resize:tuple[int, int] ):
-        self.obs_resize = obs_resize
-    
-    def __call__(self, x):
-        x = x[100:, 54:267]
-        x = cv.resize(x, self.obs_resize, interpolation=cv.INTER_NEAREST)
-        if len(x.shape) == 3:
-            x = x[np.newaxis,:,:,:]
-
-        x = torch.from_numpy(x).permute(0, 3, 1, 2).contiguous()
-        x = (x.float().div_(255.0).detach())
-        return x
-
-
-class SimplerPostprocessor:
-    def __init__(self, obs_resize):
-        self.obs_resize = obs_resize
-        
-
-    def __call__(self, x):
-        x = x[100:, 54:267]
-        x = cv.resize(x, self.obs_resize, interpolation=cv.INTER_NEAREST)
-        return x
 
 def main():
     cmd = argparse.ArgumentParser()
     cmd.add_argument("--load_weights", action="store_true", required=False, help="load weights from src/weights directory")
     args = cmd.parse_args()
+    log = configure_logger("main")
     with open("config.yaml", "r") as file:
         config = safe_load(file)
     validation_log = Path(config["global_config"]["Project_logs"]).joinpath("best_epochs")
     validation_log.mkdir(parents=True, exist_ok=True)
     obs_size = (config["global_config"]["img_size_h"], config["global_config"]["img_size_l"])
     
-    simpler_preprocessor = SimplerPreprocessor(obs_size)
-    simpler_postprocessor = SimplerPostprocessor(obs_size)
+    # == set processor functions
+    simpler_preprocessor=   ObservationTransformation(obs_size, format='pt', norm=True)
+    simpler_postprocessor = ObservationTransformation(obs_size, format='np', norm=False)
+    # ============================
     
-    
-   
-  
-    image_processor = simple_preprocessor
+    # == set log path
     log_experiment = Path(config["global_config"]["Project_logs"])
+    
+    # == configure PER
     PER4train = CuriosityReplayPriority(
         config["PER_config"]["buffer_size"], 
         
@@ -103,14 +62,17 @@ def main():
         p_max=config["curiosity_config"]["p_max"],
         c=config["curiosity_config"]["c"]
         )
+    # ====================
 
+    # == load episodes paths and load in PER buffer
     for bucket in tqdm(Path(config["rssm_config"]["rssm_dataset_path_train"]).iterdir(), desc="load PER buffer"):
         for episode in bucket.iterdir():
             PER4train.store(episode)
-    print(f"**load {len(PER4train)} items in PER buffer**")
+    
+    log.info(f"== initial {len(PER4train)} items in PER buffer == ")
     
     
-    
+    ## == setup RSSM trainer
     rssm_trainer = Trainer(
         logger=TensorBoardLogger(log_experiment, name="RSSM"),
         callbacks=[PERAdapter(PER4train), StepLimitCallback(config["rssm_config"]["train_steps"]), RichProgressBar(leave=True)],
@@ -119,7 +81,9 @@ def main():
         accumulate_grad_batches=config["rssm_config"]["batch_acc"],
         precision=config["global_config"]["precision"]
     )
+    # ==================================================================
 
+    # == setup World-model trainer
     policy_trainer = Trainer(
         logger=TensorBoardLogger(log_experiment, name="Policy"),
         callbacks=[StepLimitCallback(config["policy_config"]["train_steps"]), RichProgressBar(leave=True)],
@@ -128,6 +92,7 @@ def main():
         accumulate_grad_batches=config["policy_config"]["batch_acc"],
         precision=config["global_config"]["precision"],
     )
+    # ===============================================================
     
   
     encoder_model = Encoder(latent_dim=config["encoder_config"]["latent_dim"], model_dim=config["encoder_config"]["model_dim"])
@@ -157,9 +122,7 @@ def main():
                 alpha_obs           =   config["rssm_config"]["a_obs"],
                 alpha_att           =   config["rssm_config"]["a_att"],
                 alpha_reward        =   config["rssm_config"]["a_rew"],
-                alpha_continue      =   config["rssm_config"]["a_cont"],
-
-                #preprocess_callback=base_callback            
+                alpha_continue      =   config["rssm_config"]["a_cont"],            
         )
     else:
         rssm_model = Dreamer(
@@ -186,8 +149,6 @@ def main():
                 alpha_att           =   config["rssm_config"]["a_att"],
                 alpha_reward        =   config["rssm_config"]["a_rew"],
                 alpha_continue      =   config["rssm_config"]["a_cont"],
-                
-                #preprocess_callback=base_callback
         ) 
     
     if args.load_weights and Path(config["global_config"]["policy_w"]).exists():
@@ -233,21 +194,30 @@ def main():
         DynamicDataAllocator(config["PER_config"]["cache"], 
         PER4train), device=device
     )
-    print(f"Total steps for DREAMER: {config['rssm_config']['sample_episodes']/config['rssm_config']['train_batch']}")
-    print(f"Total steps for Policy: {config['policy_config']['sample_episodes']/config['policy_config']['train_batch']}")
+
+    if config["global_config"]["compile"]:
+        agent_model = torch.compile(agent_model, mode="reduce-overhead")
+        rssm_model = torch.compile(rssm_model, mode="reduce-overhead")
+
+    log.info(f"Total steps for DREAMER: {config['rssm_config']['sample_episodes']/config['rssm_config']['train_batch']}")
+    lof.info(f"Total steps for Policy: {config['policy_config']['sample_episodes']/config['policy_config']['train_batch']}")
+    
     for epoch in range(1, config["global_config"]["dreamer_iterations"] + 1):
-        print(f"Start epoch iteration {epoch}/{config['global_config']['dreamer_iterations']}")
+        log.info(f"Start epoch iteration {epoch}/{config['global_config']['dreamer_iterations']}")
+        
+        # == sample episodes for train rssm
         sampled_episodes, priority_idxs, _, weights = collect_episodes_from_buffer(PER4train, min(len(PER4train), config["rssm_config"]["sample_episodes"]))
         PER4train.info()
         
-        rssm_train_loader = DataLoader(EpisodicDoomDataset(
+        rssm_train_loader = DataLoader(
+            EpisodicDoomDataset(
                 episodes=sampled_episodes,
                 per_indexs=priority_idxs,
                 obs_size=(config["global_config"]["img_size_h"], config["global_config"]["img_size_l"]),
                 att_name=DoomNames.att_player_names,
                 action_name=DoomNames.buttons_names,
                 per_weights=weights,
-                preprocessor=image_processor,
+                preprocessor=simpler_preprocessor,
                 chunk_size=config["global_config"]["chunk"],
                 
             ),
@@ -258,9 +228,12 @@ def main():
             pin_memory=True
         )
 
+        
         rssm_trainer.fit(rssm_model, train_dataloaders=rssm_train_loader)
         
+        # == sample episoded for train policy
         sampled_episodes, priority_idxs, _, weights = collect_episodes_from_buffer(PER4train, min(len(PER4train), config["policy_config"]["sample_episodes"]))
+        
         PER4train.info()
         policy_train_loader = DataLoader(EpisodicDoomDataset(
                 episodes=sampled_episodes,
@@ -270,7 +243,7 @@ def main():
                 action_name=DoomNames.buttons_names,
                 per_weights=weights,
                 chunk_size=config["global_config"]["chunk"],
-                preprocessor=image_processor,
+                preprocessor=simpler_preprocessor,
             ), 
             batch_size=config["policy_config"]["train_batch"], 
             shuffle=True, 
@@ -279,13 +252,14 @@ def main():
             pin_memory=True,
         )
         
+        # == rollout
         if (epoch > config["global_config"]["warmup"]):
             policy_trainer.fit(agent_model, train_dataloaders=policy_train_loader)
         
             for env, n in zip(config["global_config"]["envs"], config["global_config"]["envs_episodes"]):
                 reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=config["global_config"]["skip_frame"], max_length=config["global_config"]["max_episode_length"], preprocess=simpler_preprocessor, post_process=simpler_postprocessor)
-                print(f"mean reword collected by policy {reword} in env {env}")
-                create_video_from_frames(best_path.joinpath("obs"), validation_log.joinpath(f"{env}_{epoch}.mp4"), 15)
+                log.info(f"mean reword collected by policy {reword} in env {env}")
+                create_video_from_frames(best_path.joinpath("obs"), validation_log.joinpath(f"{env}_{epoch}.mp4"), 15) # save best video
                 
 
 if __name__ == '__main__':

@@ -19,6 +19,7 @@ global_config:
   chunk: 64
   precision: "32-true" # bf16-mixed
   position_gain: 0.01
+  compile: false
 
   envs:
     - "VizdoomBasic-v1" # VizdoomBasic-v1 VizdoomHealthGathering-v1

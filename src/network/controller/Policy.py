@@ -62,11 +62,11 @@ class DreamerAgent(L.LightningModule):
     def update_target(self):
         with torch.no_grad():
             for p, p_target in zip(self.critic.parameters(), self.target.parameters()):
-                p_target.data.mul_(0.98).add_(0.02 * p.data)
+                p_target.data.mul_(0.97).add_(0.03 * p.data)
 
     def configure_optimizers(self):
         params = list(self.actor.parameters()) + list(self.critic.parameters())
-        return LaProp(params, self.hparams.lr, eps=1e-8)
+        return LaProp(params, self.hparams.lr, eps=1e-20)
     
     def on_train_start(self):
         self.dreamer_model.freeze()
@@ -321,14 +321,8 @@ class DreamerAgent(L.LightningModule):
                         h=burning_rssm_state.h.clone(),
                         z=burning_rssm_state.z.clone()
                     )
-
-
                     
                     
-                    current_imag_rssm_state = RSSMState(
-                        h=burning_rssm_state.h.clone(),
-                        z=burning_rssm_state.z.clone()
-                    )
                     
                     z_flat_imag = current_imag_rssm_state.z.flatten(1)
                     current_imag_s = self.dreamer_model.encode_state(current_imag_rssm_state.h, z_flat_imag)

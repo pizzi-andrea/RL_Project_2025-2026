@@ -29,9 +29,14 @@ class DynamicDataAllocator:
 
     def alloc_episode(self, episode: list[dict], **exstras:np.ndarray):
         """
-        
+        Serialize single episode on the disk
+
+        Args:
+            episode(list[dict]): list of steps in the episode, each step contain (s_t, a_t, r_t, c_t)
+            exstras(np.ndarray[int]): action mask for multiple key configuration
         """
         
+        # Restore from previus bukets or create new one 
         if self.idx > 0 and self.episodes_indexs[-1] < self.episode_for_subdir:
             episode_subdir_idx = self.episodes_indexs[-1]
             base_path = self.iter_paths[-1]
@@ -46,17 +51,18 @@ class DynamicDataAllocator:
             base_path = new_path
             self.idx += 1
 
-        
+        # create save path
         save_path = base_path.joinpath(f"{episode_subdir_idx}")
 
-        
+        # use auxiliary function to save episode as a folder
         dict2folder(episode, save_path)
         if exstras:
             np.savez_compressed(save_path.joinpath("mask_actions.npz"), **exstras)
 
-        
+        # store only the path in the PER buffer
         self.buffer.store(save_path, True)
 
+        # clean list
         episode.clear()
 
         return save_path
