@@ -8,62 +8,10 @@ import torch
 import torch.nn as nn
 
 from .utils import *
-
+from .gru import DreamerV3GRUCell
 # Custom Grucell multiblock
 import torch
 import torch.nn as nn
-
-class DreamerGRUCell(nn.Module):
-    def __init__(self, input_size, hidden_size, num_blocks=8):
-        super().__init__()
-
-        assert hidden_size % num_blocks == 0
-
-        self.hidden_size = hidden_size
-        self.num_blocks = num_blocks
-        self.block_size = hidden_size // num_blocks
-
-        self.input_to_gates = nn.Linear(input_size, 3 * hidden_size, bias=False)
-
-        self.recurrent_weight = nn.Parameter(
-            torch.empty(num_blocks, self.block_size, 3 * self.block_size)
-        )
-
-        self.norm_r = nn.RMSNorm(hidden_size)
-        self.norm_z = nn.RMSNorm(hidden_size)
-        self.norm_n = nn.RMSNorm(hidden_size)
-
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        for i in range(self.num_blocks):
-            nn.init.xavier_uniform_(self.recurrent_weight[i])
-
-    def forward(self, x, h_prev):
-        B = x.shape[0]
-
-        # Input
-        gates_x = self.input_to_gates(x)  # [B, 3H]
-        x_r, x_z, x_n = torch.chunk(gates_x, 3, dim=-1)
-
-        # Recurrent (block-diagonal)
-        h_blocks = h_prev.view(B, self.num_blocks, self.block_size).transpose(0, 1)
-        gates_h = torch.bmm(h_blocks, self.recurrent_weight)  # [num_blocks, B, 3*block]
-
-        
-        h_r, h_z, h_n = torch.chunk(gates_h, 3, dim=2)
-
-        h_r = h_r.transpose(0, 1).reshape(B, self.hidden_size)
-        h_z = h_z.transpose(0, 1).reshape(B, self.hidden_size)
-        h_n = h_n.transpose(0, 1).reshape(B, self.hidden_size)
-
-        # GRU
-        r = torch.sigmoid(self.norm_r(x_r + h_r))
-        z = torch.sigmoid(self.norm_z(x_z + h_z))
-        n = torch.tanh(self.norm_n(x_n + r * h_n))
-
-        h = (1 - z) * n + z * h_prev
-        return h
 
 # -------------------------
 # RSSM (discrete latent)
@@ -143,11 +91,11 @@ class RSSM(nn.Module): # need specific train loop
         self.block_size = h_dim // self.num_gru_blocks
         self.gru_input_size = action_dim + att_dim + hidden_dim # z_emb + a_emb + h_mixed_proj
         
-        print("expected GRU", self.gru_input_size)
-        self.gru_cell = DreamerGRUCell(
+       
+        self.gru_cell = DreamerV3GRUCell(
             input_size=hidden_dim, 
             hidden_size=self.h_dim,  
-            num_blocks=self.num_gru_blocks
+         
         )
         
         # predict encoded rappresentation z_hat given GRUcell hidden state and input rappresentation
@@ -184,6 +132,11 @@ class RSSM(nn.Module): # need specific train loop
 
             nn.Linear(hidden_dim, self.K * self.L)
         )
+        dreamerv3_normal_initializer(self.prior_net[-1].weight)
+        dreamerv3_normal_initializer(self.post_net[-1].weight)
+
+
+
 
     def init_state(self, batch_size: int, device=None) -> RSSMState:
         """Inizialize RSSM memory and return the state"""

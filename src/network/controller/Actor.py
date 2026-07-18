@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.distributions import OneHotCategorical
-
+from .utils import *
 class Actor(nn.Module):
     """Actor network with unimix"""
     def __init__(self, dim_state, num_dist, hidden_dim=1024, unimix=0.01):
@@ -12,35 +12,37 @@ class Actor(nn.Module):
         self.unimix = unimix
         
         
-        # == layer l1
+        # == mlp depth
         self.l1 = nn.Sequential(
-            nn.Linear(in_features=dim_state, out_features=hidden_dim*2),
-            nn.RMSNorm(hidden_dim*2),
+            nn.Linear(in_features=dim_state, out_features=hidden_dim*2, bias=False),
+            nn.LayerNorm(hidden_dim*2, eps=0.001),
             nn.SiLU(),
         )
 
-        # == layer l2
         self.l2 = nn.Sequential(
-            nn.Linear(in_features=hidden_dim*2, out_features=hidden_dim),
-            nn.RMSNorm(hidden_dim),
+            nn.Linear(in_features=hidden_dim*2, out_features=hidden_dim, bias=False),
+            nn.LayerNorm(hidden_dim, eps=0.001),
             nn.SiLU(),
         )
 
-        # == layer l3
         self.l3 = nn.Sequential(
-            nn.Linear(in_features=hidden_dim, out_features=hidden_dim),
-            nn.RMSNorm(hidden_dim),
+            nn.Linear(in_features=hidden_dim, out_features=hidden_dim, bias=False),
+            nn.LayerNorm(hidden_dim, eps=0.001),
             nn.SiLU(),
         )
 
         # == output layers
-        self.dist_pred = nn.Linear(in_features=hidden_dim, out_features=num_dist)
+        self.dist_pred = nn.Linear(in_features=hidden_dim, out_features=num_dist, bias=True)
         
         # == low variance init (improve convergence rate)
-        torch.nn.init.orthogonal_(self.dist_pred.weight, gain=1.0) 
-        self.dist_pred.bias.data.fill_(0.0)
+        self.apply(self._init_weights)
     
-  
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+        
+            dreamerv3_normal_initializer(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
     def forward(self, x, valid_actions_mask=None):
         x = self.l1(x)
         x = self.l2(x)
@@ -54,8 +56,7 @@ class Actor(nn.Module):
             logits = logits.masked_fill(~mask, -1e9)
 
         # log_softmax
-        log_probs = F.log_softmax(logits, dim=-1)
-        probs = log_probs.exp()
+        probs = torch.softmax(logits, dim=-1)
 
         # unimix that prevent actions collapse (zero probs)
         if valid_actions_mask is not None:
@@ -75,11 +76,14 @@ class Actor(nn.Module):
 
         # init dist
         dist = OneHotCategorical(logits=mixed_log_probs)
+        
+        # STE
+        sampled_action = dist.sample()
+        action = sampled_action.float().detach() + (mixed_probs - mixed_probs.detach())
 
         # use different sampling strategy that depend by train phase
         
-        action = dist.sample() 
-        log_prob = dist.log_prob(action)
+        log_prob = dist.log_prob(sampled_action)
         entropy = dist.entropy()
 
         return action, log_prob, entropy

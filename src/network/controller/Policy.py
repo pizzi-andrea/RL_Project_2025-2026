@@ -31,10 +31,15 @@ class DreamerAgent(L.LightningModule):
                  ema_epsilon:float= 1e-6,
                  lambd:float=0.95, 
                  gamma:float=0.997,
-                 lr=0.001, hidden_dim:int=1024, preprocess_callback=None):
+                 lr_actor:float=3e-5,    # <-- Sostituisci il singolo lr
+                 lr_critic:float=3e-5,
+                  hidden_dim:int=1024,
+                   preprocess_callback=None):
         super().__init__()
         self.save_hyperparameters(ignore=['dreamer_model', 'preprocess_callback'])
         # import dreamer model or weigths
+        self.automatic_optimization = False 
+        self.save_hyperparameters(ignore=['dreamer_model', 'preprocess_callback'])
         
         if isinstance(dreamer_model, str):
             self.dreamer_model = Dreamer.load_from_checkpoint(dreamer_model)
@@ -68,8 +73,9 @@ class DreamerAgent(L.LightningModule):
                 p_target.data.mul_(0.98).add_(0.02 * p.data)
 
     def configure_optimizers(self):
-        params = list(self.actor.parameters()) + list(self.critic.parameters())
-        return LaProp(params, self.hparams.lr, eps=1e-20)
+        opt_actor = LaProp(self.actor.parameters(), lr=self.hparams.lr_actor, eps=1e-5)
+        opt_critic = LaProp(self.critic.parameters(), lr=self.hparams.lr_critic, eps=1e-5)
+        return [opt_actor, opt_critic]
     
     def on_train_start(self):
         self.dreamer_model.freeze()
@@ -110,11 +116,9 @@ class DreamerAgent(L.LightningModule):
 
         # -- critic: stima valori
         v_hat_log_critic, v_hat_critic = self.critic(states_hat)
-        
-        # Per i real states, states_real è T+1, quindi v_hat_log_critic_real sarà [B, T+1, buckets]
         v_hat_log_critic_real, v_hat_critic_real = self.critic(states_real)
-        
         with torch.no_grad():
+
             v_hat_log_target, v_hat_target = self.target(states_hat)
             v_hat_log_target_real, v_hat_target_real = self.target(states_real)
             
@@ -142,7 +146,7 @@ class DreamerAgent(L.LightningModule):
             # --- LAMBDA RETURNS (Uso di execution_mask) ---
             lambda_return = lambda_returns(
                 rewards=r_hat,
-                expected_values=v_hat_target,
+                expected_values=v_hat_target, # v_hat_target DEVE essere in spazio reale
                 execution_mask=exec_mask_imag,
                 lam=self.lambd,
                 gamma=self.gamma
@@ -159,15 +163,18 @@ class DreamerAgent(L.LightningModule):
             two_hot_lambda_return = twohot(symlog(lambda_return), self.critic.buckets)
             two_hot_lambda_return_real = twohot(symlog(lambda_return_real), self.critic.buckets)
 
+            slow_critic_twohot = twohot(symlog(v_hat_target[:, :-1]), self.critic.buckets)
+            slow_critic_twohot_real = twohot(symlog(v_hat_target_real[:, :-1]), self.critic.buckets)
+
         # -- Actor Loss (Uso di valid_mask / discount)
         actor_loss_v, ema_scale, advantage, _ = actor_loss(
-            td_return=lambda_return,
-            critic_values=v_hat_critic[:, :-1].detach(),
+            td_return=lambda_return, # Passato in spazio reale
+            critic_values=v_hat_critic[:, :-1].detach(), # Passato in spazio reale
             action_log_prob=a_hat_log_probs,
             entropy=entropy,
             ema_scaler=self.ema,
             entropy_scale=self.entropy_coef,
-            c_soft=discount_c, # Maschera di validità con decadimento
+            c_soft=discount_c, 
             mask=valid_mask_imag
         )
 
@@ -175,17 +182,41 @@ class DreamerAgent(L.LightningModule):
         critic_l = critic_loss(
             v_hat_log_critic[:, :-1],     
             two_hot_lambda_return,        
-            discount_c 
+            discount_c,
+            slow_critic_twohot=slow_critic_twohot # Regularizer
         )
 
         critic_r = critic_loss(
             v_hat_log_critic_real[:, :-1],
             two_hot_lambda_return_real,
-            discount_r 
+            discount_r,
+            slow_critic_twohot=slow_critic_twohot_real # Regularizer
         )
         
         critic_loss_v = critic_l + 0.3 * critic_r
         loss = critic_loss_v + actor_loss_v
+
+        # ========================================================
+        # INIZIO BLOCCO OTTIMIZZAZIONE MANUALE
+        # ========================================================
+        
+        # 1. Recupera gli ottimizzatori (nello stesso ordine in cui li hai restituiti in configure_optimizers)
+        opt_actor, opt_critic = self.optimizers()
+        
+        # 2. Azzera i gradienti per entrambi
+        opt_actor.zero_grad()
+        opt_critic.zero_grad()
+        
+        # 3. Propagazione all'indietro usando l'utility di Lightning
+        self.manual_backward(loss)
+        
+        # 4. Aggiorna i pesi
+        opt_actor.step()
+        opt_critic.step()
+        
+        # ========================================================
+        # FINE BLOCCO OTTIMIZZAZIONE MANUALE
+        # ========================================================
 
         # -- Metrics
         lengths = discount_c.sum(dim=1).clamp(min=1)
@@ -222,11 +253,12 @@ class DreamerAgent(L.LightningModule):
     @torch.no_grad()
     def on_train_batch_end(self, outputs, batch, batch_idx):
         self.ema.eval()
-        obs = outputs["imagination"]
+        obs = torch.sigmoid(outputs["imagination"])
         real = outputs["burn"]
+
         self.update_target()
-    
-        imagined_frames = torch.clamp(self.dreamer_model.predict_obs(obs), 0.0, 1.0)
+        # check if decoder output uniromalize if correct
+        imagined_frames = torch.sigmoid(self.dreamer_model.predict_obs(obs))
 
         if  self.global_step % 100 == 0:
             log_dir = self.logger.log_dir if (self.logger and hasattr(self.logger, 'log_dir')) else "."
@@ -367,7 +399,7 @@ class DreamerAgent(L.LightningModule):
 
             # Predizioni del World Model (Frozen)
             _, r_t = self.dreamer_model.predict_reward(s)
-            c_t    = self.dreamer_model.predict_continue(s)
+            _, c_t    = self.dreamer_model.predict_continue(s)
             user_att_t_hat = self.dreamer_model.predict_user_att(s)
 
             reward[:, t]    = r_t

@@ -15,37 +15,34 @@ class Critic(nn.Module):
 
         self.register_buffer("buckets", torch.linspace(min_buckets, max_buckets, num_buckets)  ) 
         
-        self.l1 = nn.Sequential(
-            nn.Linear(in_features=dim_state, out_features=hidden_dim*2),
-            nn.RMSNorm(hidden_dim*2),
-            nn.SiLU(),
-            
-        )
-        self.l2 = nn.Sequential(
-            nn.Linear(in_features=hidden_dim*2, out_features=hidden_dim),
-            nn.RMSNorm(hidden_dim),
-            nn.SiLU(),
-        )
 
-        self.l3 = nn.Sequential(
-            nn.Linear(in_features=hidden_dim, out_features=hidden_dim),
-            nn.RMSNorm(hidden_dim),
-            nn.SiLU(),
-        )
+        self.net = self._build_mlp(dim_state, hidden_dim)
+        self.buckets_proj = nn.Linear(hidden_dim, num_buckets, bias=True)
+        self.softmax = nn.Softmax(dim=-1)
 
-
-        
-        self.buckets_proj = nn.Linear(in_features=hidden_dim, out_features=num_buckets)
-        self.softmax = nn.Softmax(-1)
-
-        nn.init.zeros_(self.buckets_proj.weight)
-        nn.init.zeros_(self.buckets_proj.bias)
+        self.apply(self._init_weights)
    
-    
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            dreamerv3_normal_initializer(m.weight)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+   
+    def _build_mlp(self, dim_state, hidden_dim):
+        """Helper per costruire MLP senza bias nei layer nascosti e con LayerNorm"""
+        return nn.Sequential(
+            nn.Linear(dim_state, hidden_dim * 2, bias=False),
+            nn.LayerNorm(hidden_dim * 2, eps=0.001),
+            nn.SiLU(),
+            nn.Linear(hidden_dim * 2, hidden_dim, bias=False),
+            nn.LayerNorm(hidden_dim, eps=0.001),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim, bias=False),
+            nn.LayerNorm(hidden_dim, eps=0.001),
+            nn.SiLU(),
+        )
     def forward(self, x):
-        x = self.l1(x)
-        x = self.l2(x)
-        x = self.l3(x)
+        x = self.net(x)
 
         pred_values_log =  self.buckets_proj(x)
         pred_values_prob = self.softmax(pred_values_log)

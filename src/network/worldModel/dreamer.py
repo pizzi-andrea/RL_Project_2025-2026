@@ -191,8 +191,9 @@ class Dreamer(L.LightningModule):
             nn.SiLU(),
         )
 
-        nn.init.xavier_uniform_(self.reward_head[-1].weight)
+        nn.init.zeros_(self.reward_head[-1].weight)
         nn.init.zeros_(self.reward_head[-1].bias)
+        nn.init.zeros_(self.cont_head[-1].bias)
     
     def compute_loss(self, out, batch):
 
@@ -305,6 +306,7 @@ class Dreamer(L.LightningModule):
 
     def encode_action(self, x):
         return self.action_encoder(x)
+    
     def encode_state(self, h, z):
         x = torch.cat([h, z], dim=-1)
         return self.state_encoder(x)
@@ -312,24 +314,34 @@ class Dreamer(L.LightningModule):
  
     def predict_reward(self, feat):
         """Predict reward in differentiable world"""
-        B = self.buckets
+        # 1. Calcola i logit (pesi non normalizzati) per ogni bucket
         pred_rewards_buckets_log = self.reward_head(feat)
+        
+        # 2. Converti i logit in probabilità tramite softmax
         pred_rewards_buckets_probs = self.softmax(pred_rewards_buckets_log)
 
-        pred_rewards = symexp( (pred_rewards_buckets_probs * B).sum(dim=-1) )
+        # 3. Calcola l'aspettativa della reward nello spazio symlog.
+        # Effettuiamo il prodotto scalare (somma ponderata) tra le probabilità
+        # e i valori target (self.buckets) lungo l'ultima dimensione[cite: 7].
+        expected_rewards_symlog = torch.sum(pred_rewards_buckets_probs * self.buckets, dim=-1)
+        
+        # 4. Ritorna nello spazio lineare tramite symexp
+        pred_rewards = symexp(expected_rewards_symlog)
+        
+        # Restituisci sempre sia i logit che la reward predetta, come richiesto
         return pred_rewards_buckets_log, pred_rewards
     
   
 
     def predict_continue(self, feat):
         """
-        Restituisce la probabilità di continuazione (Soft) per il calcolo della Loss.
+        predict continue flags, return both values logits and value to obtain maximum stability in the training
         """
         logits = self.cont_head(feat).squeeze(-1)
         probs = torch.sigmoid(logits) 
         
         
-        return probs
+        return logits, probs
     
     def predict_obs(self, s):
         """Recostruct observed state"""
@@ -499,7 +511,7 @@ class Dreamer(L.LightningModule):
         x_hat        = self.predict_obs(s_t)             
         r_hat_log, _ = self.predict_reward(s_t)             
         att_hat      = self.predict_user_att(s_t)                
-        c            = self.predict_continue(s_t).squeeze(-1)   
+        c, _            = self.predict_continue(s_t) 
 
         return {
             "x_hat": x_hat,

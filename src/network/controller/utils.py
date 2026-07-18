@@ -1,34 +1,42 @@
 import cv2 as cv
-import torch 
-from torch import nn
 from torch.nn.functional import sigmoid
+import torch
+import torch.nn.functional as F
+from torch import nn
+import numpy as np
+from typing import Any, List, Optional, Tuple, Union
+from collections import deque
 class EMAScalar(nn.Module):
     def __init__(self, decay=0.98, eps=1e-6):
         super().__init__()
         self.decay = decay
         self.eps = eps
-        self.register_buffer("scale", torch.tensor(1.0))
-        self.register_buffer("_initialized", torch.tensor(False))
+
+        self.register_buffer("pct5", torch.tensor(float('nan')))
+        self.register_buffer("pct95", torch.tensor(float('nan')))
 
     def forward(self, values, mask=None):
         values = values.detach()
         
         if not self.training:
-            return self.scale.detach()
+            if torch.isnan(self.pct5):
+                return 0.0, 1.0
+            return self.pct5.detach(), torch.clamp(self.pct95 - self.pct5, min=self.eps).detach()
 
         with torch.no_grad():
             flat = values[mask.bool()] if mask is not None else values.flatten()
-            per_95 = torch.quantile(flat, 0.95)
-            per_05 = torch.quantile(flat, 0.05)
-            range_val = (per_95 - per_05).clamp_min(self.eps)
+            cur_5 = torch.quantile(flat, 0.05)
+            cur_95 = torch.quantile(flat, 0.95)
 
-            if not self._initialized:
-                self.scale.copy_(range_val)
-                self._initialized.fill_(True)
+            if torch.isnan(self.pct5):
+                self.pct5.copy_(cur_5)
+                self.pct95.copy_(cur_95)
             else:
-                self.scale.mul_(self.decay).add_((1 - self.decay) * range_val)
+                self.pct5.mul_(self.decay).add_((1.0 - self.decay) * cur_5)
+                self.pct95.mul_(self.decay).add_((1.0 - self.decay) * cur_95)
 
-        return self.scale.detach()
+        invscale = torch.clamp(self.pct95 - self.pct5, min=self.eps)
+        return self.pct5.detach(), invscale.detach()
 
 
 def symlog(x):
@@ -37,7 +45,7 @@ def symlog(x):
 
 def symexp(x):
     #x = x.clamp(mm, mx)
-    return torch.sign(x)*(torch.exp(torch.abs(x)) - 1)
+    return torch.sign(x)*(torch.exp(torch.abs(x)) - 1.0)
 
 
 # utils.py modificato
@@ -70,14 +78,16 @@ def lambda_returns(rewards, expected_values, execution_mask, gamma=0.997, lam=0.
 
 
 # Sostituisci la tua funzione critic_loss in utils.py
-def critic_loss(v_hat, target, c_soft):
+def critic_loss(v_hat_log, target_twohot, c_soft, slow_critic_twohot=None):
     """
     c_soft: valid_mask (o discount) [B, T]
     """
-    log_probs = torch.nn.functional.log_softmax(v_hat, dim=-1)   
-    per_step_loss = -(target * log_probs).sum(dim=-1)
+    per_step_loss = -(target_twohot * v_hat_log).sum(dim=-1)
+
+    if slow_critic_twohot is not None:
+        reg_loss = -(slow_critic_twohot * v_hat_log).sum(dim=-1)
+        per_step_loss = per_step_loss + reg_loss
     
-    # Applichiamo la maschera ai dati validi
     weighted_loss = per_step_loss * c_soft
     
     lengths = c_soft.sum(dim=1).clamp(min=1.0)
@@ -133,33 +143,28 @@ def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, c
     """
     c_soft: valid_mask [B, T] (1 per dati reali, 0 per padding)
     """
-    # 1. Calcolo dello scale EMA per normalizzare il vantaggio
-    # DreamerV3 usa questo per stabilizzare la scala dei reward sognati
-    s = ema_scaler(td_return, mask)
+    # FIX: Comprimiamo i valori nello spazio Symlog 
+    offset, invscale = ema_scaler(td_return, mask)
+    
+    scaled_targets = (td_return - offset) / invscale
+    scaled_preds = (critic_values - offset) / invscale
   
-    # 2. Advantage normalizzato (senza gradienti per il critic)
-    # Importante: clampare s per evitare divisioni per zero
-    advantage = (td_return - critic_values).detach()
-    normalized_advantage = advantage / torch.clamp(s, min=1.0)
+    advantage = (scaled_targets - scaled_preds).detach()
     
-    # 3. Objective (da massimizzare): log_prob * adv + scale * entropy
-    # Nota: L'entropia viene AGGIUNTA per favorire l'esplorazione
-    per_step_objective = (normalized_advantage * action_log_prob) + (entropy_scale * entropy)
-    
+    per_step_objective = (advantage * action_log_prob) + (entropy_scale * entropy)
+
     # 4. Applicazione MASCHERA (c_soft)
-    # Azzeriamo l'obiettivo dove i dati non sono validi
     weighted_objective = per_step_objective * c_soft
     
     # 5. Media pesata corretta
     lengths = c_soft.sum(dim=1).clamp(min=1.0)
-    # Trasformiamo l'objective in LOSS (moltiplicando per -1)
     final_loss = -( (weighted_objective.sum(dim=1) / lengths).mean() )
     
     # Metriche
     with torch.no_grad():
-        adv_metric = ((normalized_advantage * action_log_prob * c_soft).sum(dim=1) / lengths).mean().item()
+        adv_metric = ((advantage * action_log_prob * c_soft).sum(dim=1) / lengths).mean().item()
         ent_metric = ((entropy_scale * entropy * c_soft).sum(dim=1) / lengths).mean().item()
-        ema_val = s.mean().item()
+        ema_val = invscale.mean().item()
 
     return final_loss, ema_val, adv_metric, ent_metric
 
@@ -211,3 +216,62 @@ def twohot(x, B):
     out.scatter_add_(-1, upper.unsqueeze(-1), upper_weight.unsqueeze(-1))
     
     return out
+
+
+def force_list(
+    elements: Optional[Any] = None, to_tuple: bool = False
+) -> Union[List, Tuple]:
+    """
+    Makes sure `elements` is returned as a list, whether `elements` is a single
+    item, already a list, or a tuple.
+
+    Args:
+        elements: The inputs as a single item, a list/tuple/deque of items, or None,
+            to be converted to a list/tuple. If None, returns empty list/tuple.
+        to_tuple: Whether to use tuple (instead of list).
+
+    Returns:
+        The provided item in a list of size 1, or the provided items as a
+        list. If `elements` is None, returns an empty list. If `to_tuple` is True,
+        returns a tuple instead of a list.
+    """
+    ctor = list
+    if to_tuple is True:
+        ctor = tuple
+    return (
+        ctor()
+        if elements is None
+        else ctor(elements)
+        if type(elements) in [list, set, tuple, deque]
+        else ctor([elements])
+    )
+
+def dreamerv3_normal_initializer(parameters):
+    """From Danijar Hafner's DreamerV3 JAX repo.
+
+    Used on any layer whenever the config for that layer has `winit="normal"`.
+
+    Note: Not identical with Glorot normal. Differs in the std computation
+    glorot_std = sqrt(2/(fanin+fanout))
+    this_std = sqrt(1/AVG(fanin, fanout)) / [somemagicnumber=0.879...]
+    """
+    for param in force_list(parameters):
+        if param.dim() > 1:
+            fanin, fanout = _fans(param.shape)
+            scale = 1.0 / np.mean([fanin, fanout])
+            std = np.sqrt(scale) / 0.87962566103423978
+            with torch.no_grad():
+                param.normal_(0, std)
+                param.clamp_(-2, 2)
+
+
+def _fans(shape):
+    if len(shape) == 0:
+        return 1, 1
+    elif len(shape) == 1:
+        return shape[0], shape[0]
+    elif len(shape) == 2:
+        return shape
+    else:
+        space = int(np.prod(shape[:-2]))
+        return shape[-2] * space, shape[-1] * space
