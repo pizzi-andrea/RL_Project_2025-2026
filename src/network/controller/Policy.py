@@ -181,7 +181,7 @@ class DreamerAgent(L.LightningModule):
             symlog_lambda_real = (symlog(lambda_return_real) * continue_real).sum(dim=1) / lengths_r
             log_lambda = (lambda_return * c_hat).sum(dim=1) / lengths
             log_reward = (r_hat * c_hat).sum(dim=1) / lengths
-            real_reward = (r_real * continue_real).sum(dim=1) / lengths_r
+            real_reward = (r_real * continue_real).sum(dim=1)
             real_lambda = (lambda_return_real * continue_real).sum(dim=1) / lengths_r
             entropy_m = ((entropy * c_hat).sum(dim=1) / lengths).mean()
 
@@ -210,7 +210,7 @@ class DreamerAgent(L.LightningModule):
         self.update_target()
         
         latent_space_sample = outputs["imagination"][0].unsqueeze(0) 
-        imagined_frames = torch.sigmoid(self.dreamer_model.predict_obs(latent_space_sample))
+        imagined_frames = self.dreamer_model.predict_obs(latent_space_sample)
         imagined_frames = imagined_frames.squeeze(0) 
 
         real = outputs["burn"][0] 
@@ -248,109 +248,125 @@ class DreamerAgent(L.LightningModule):
         pass
         
     def forward(self, obs, action, user_att, is_first, burn_in:int, mask=None, valid_actions_mask=None, rssm_state=None):
-        B, T, _, _, _ = obs.shape
-        device = obs.device
+            B, T, _, _, _ = obs.shape
+            device = obs.device
 
-        x = self.dreamer_model.encode_obs(obs)
-        user_att_enc = self.dreamer_model.encode_att(user_att)
-        x = x.detach()
-        user_att_enc = user_att_enc.detach()
+            x = self.dreamer_model.encode_obs(obs)
+            user_att_enc = self.dreamer_model.encode_att(user_att)
+            x = x.detach()
+            user_att_enc = user_att_enc.detach()
 
-        if rssm_state is None:
-            rssm_state = self.rssm.init_state(B, device)
+            # Inizializzazione pulita
+            if rssm_state is None:
+                rssm_state = self.rssm.init_state(B, device)
 
-        real_states = torch.empty(B, T, self.emb_dim, device=device)
-        last_action = action[:, 0].clone() # 🎯 Inizializziamo coerentemente invece di usare gli zeri
+            last_action = action[:, 0].clone() 
 
-        with torch.no_grad():
-            for t in range(T):
-                m_t = mask[:, t].unsqueeze(-1)
-                a_t = self.dreamer_model.encode_action(last_action)
-                
-                next_rssm_state, _, _ = self.rssm.observe_step(
-                    rssm_state, a_t, x[:, t], user_att_enc[:, t], mask[:, t]
-                )
+            # === 1. RESET INIZIALE CORRETTO ===
+            # Resettiamo la memoria SOLO all'istante t=0 per i nuovi episodi. 
+            # In questo modo il burn-in costruirà un ricordo solido e non verrà cancellato.
+            rssm_state, last_action = self._apply_episode_reset(
+                rssm_state, last_action, action[:, 0], is_first
+            )
 
-                rssm_state.h = torch.where(m_t.bool(), next_rssm_state.h, rssm_state.h)
-                
-                m_t_z = m_t.unsqueeze(-1) 
-                rssm_state.z = torch.where(m_t_z.bool(), next_rssm_state.z, rssm_state.z)
-                
-                last_action = torch.where(m_t.bool(), action[:, t], last_action)
-
-                z_flat = rssm_state.z.flatten(1)
-                real_states[:, t] = self.dreamer_model.encode_state(rssm_state.h, z_flat)
-
-                if t + 1 == burn_in:
-                    # 🎯 Passiamo action[:, 0] come inizializzazione per il reset
-                    burning_rssm_state, last_action_imag = self._apply_episode_reset(
-                        rssm_state, last_action, action[:, 0], is_first
-                    )
-
-                    current_imag_rssm_state = RSSMState(
-                        h=burning_rssm_state.h.clone(),
-                        z=burning_rssm_state.z.clone()
-                    )
-                    
-                    z_flat_imag = current_imag_rssm_state.z.flatten(1)
-                    current_imag_s = self.dreamer_model.encode_state(current_imag_rssm_state.h, z_flat_imag)
-                    last_action_imag = last_action_imag.clone()
-
-            if burn_in == 0:
-                # 🎯 Passiamo action[:, 0] come inizializzazione per il reset
-                rssm_state_reset, action_reset = self._apply_episode_reset(
-                    self.rssm.init_state(B, device), last_action, action[:, 0], is_first
-                )
-                current_imag_rssm_state = rssm_state_reset
-                current_imag_s = self.dreamer_model.encode_state(
-                    rssm_state_reset.h, rssm_state_reset.z.flatten(1)
-                )
-                last_action_imag = action_reset
-                
-        real_states = torch.cat([real_states, real_states[:, -1:]], dim=1)
-
-        reward        = torch.empty(B, self.horizon, device=device)
-        continues     = torch.empty(B, self.horizon, device=device)
-        entropys      = torch.empty(B, self.horizon, device=device)
-        log_probs     = torch.empty(B, self.horizon, device=device)
-        latent_states = torch.empty(B, self.horizon, self.emb_dim, device=device)
-        current_action_mask = valid_actions_mask[:, 0] if valid_actions_mask is not None else None
-        s           = current_imag_s
-        rssm_state  = current_imag_rssm_state
-        last_action = last_action_imag
-
-        for t in range(self.horizon):
-            act_t1, log_p, entropy = self.actor(s, current_action_mask)
-
-            latent_states[:, t] = s
-
-            r_t_real = self.dreamer_model.predict_reward(s)
-            c_t      = self.dreamer_model.predict_continue(s)
-            user_att_t_real = self.dreamer_model.predict_user_att(s)
-
-            reward[:, t]    = r_t_real
-            continues[:, t] = c_t
-            log_probs[:, t] = log_p
-            entropys[:, t]  = entropy
-
-            act_t1_enc = self.dreamer_model.encode_action(act_t1)
-            att_t1_enc = self.dreamer_model.encode_att(user_att_t_real)
-
-            rssm_state, _ = self.rssm.imagine_step(rssm_state, act_t1_enc, att_t1_enc)
+            real_states = torch.empty(B, T, self.emb_dim, device=device)
             
-            z_flat = rssm_state.z.flatten(1)
-            s = self.dreamer_model.encode_state(rssm_state.h, z_flat)
+            # Buffer per salvare l'intero storico degli stati interni dell'RSSM
+            h_history = torch.empty(B, T, self.rssm.h_dim, device=device)
+            z_history = torch.empty(B, T, self.rssm.L, self.rssm.K, device=device)
 
-        latent_states = torch.cat([latent_states, s.unsqueeze(1)], dim=1)
+            # === 2. OSSERVAZIONE DELLA REALTÀ (TUTTA LA SEQUENZA) ===
+            with torch.no_grad():
+                for t in range(T):
+                    m_t = mask[:, t].unsqueeze(-1)
+                    a_t = self.dreamer_model.encode_action(last_action)
+                    
+                    next_rssm_state, _, _ = self.rssm.observe_step(
+                        rssm_state, a_t, x[:, t], user_att_enc[:, t], mask[:, t]
+                    )
 
-        return {
-            "rewards": reward,
-            "continues": continues,
-            "entropy": entropys,
-            "imagination": latent_states,
-            "log_probs": log_probs,
-            "real_states": real_states
-        }
+                    rssm_state.h = torch.where(m_t.bool(), next_rssm_state.h, rssm_state.h)
+                    
+                    m_t_z = m_t.unsqueeze(-1) 
+                    rssm_state.z = torch.where(m_t_z.bool(), next_rssm_state.z, rssm_state.z)
+                    
+                    last_action = torch.where(m_t.bool(), action[:, t], last_action)
+
+                    z_flat = rssm_state.z.flatten(1)
+                    real_states[:, t] = self.dreamer_model.encode_state(rssm_state.h, z_flat)
+                    
+                    # Salviamo lo stato esatto a questo istante temporale
+                    h_history[:, t] = rssm_state.h.clone()
+                    z_history[:, t] = rssm_state.z.clone()
+
+            # Replica l'ultimo stato per allineare le dimensioni con il critic loss come nel tuo codice originale
+            real_states = torch.cat([real_states, real_states[:, -1:]], dim=1)
+
+            # === 3. FLATTENING (LA MAGIA DI DREAMER) ===
+            # Fonde Batch e Tempo: B * T diventerà il nostro nuovo mega-batch per l'immaginazione
+            BT = B * T
+            
+            s_flat = real_states[:, :-1].reshape(BT, self.emb_dim) # Escludiamo l'ultimo fittizio
+            
+            rssm_state_flat = RSSMState(
+                h=h_history.reshape(BT, self.rssm.h_dim),
+                z=z_history.reshape(BT, self.rssm.L, self.rssm.K)
+            )
+
+            if valid_actions_mask is not None:
+                if valid_actions_mask.dim() == 3: # Se ha forma [B, T, action_dim]
+                    current_action_mask = valid_actions_mask.reshape(BT, -1)
+                else: # Se ha forma [B, action_dim]
+                    current_action_mask = valid_actions_mask.repeat_interleave(T, dim=0)
+            else:
+                current_action_mask = None
+
+            # Tensori per i risultati dell'immaginazione (Forma: [B*T, Horizon, ...])
+            reward        = torch.empty(BT, self.horizon, device=device)
+            continues     = torch.empty(BT, self.horizon, device=device)
+            entropys      = torch.empty(BT, self.horizon, device=device)
+            log_probs     = torch.empty(BT, self.horizon, device=device)
+            latent_states = torch.empty(BT, self.horizon, self.emb_dim, device=device)
+
+            # === 4. IMMAGINAZIONE TOTALE PARALLELA ===
+            s = s_flat
+            rssm_state = rssm_state_flat
+
+            for t in range(self.horizon):
+                act_t1, log_p, entropy = self.actor(s, current_action_mask)
+
+                latent_states[:, t] = s
+
+                r_t_real = self.dreamer_model.predict_reward(s)
+                c_t      = self.dreamer_model.predict_continue(s)
+                user_att_t_real = self.dreamer_model.predict_user_att(s)
+
+                reward[:, t]    = r_t_real
+                continues[:, t] = c_t
+                log_probs[:, t] = log_p
+                entropys[:, t]  = entropy
+
+                act_t1_enc = self.dreamer_model.encode_action(act_t1)
+                att_t1_enc = self.dreamer_model.encode_att(user_att_t_real)
+
+                rssm_state, _ = self.rssm.imagine_step(rssm_state, act_t1_enc, att_t1_enc)
+                
+                z_flat_imag = rssm_state.z.flatten(1)
+                s = self.dreamer_model.encode_state(rssm_state.h, z_flat_imag)
+                
+                # La maschera valida delle azioni ha senso solo al primo frame, poi l'agente è libero
+                current_action_mask = None
+
+            latent_states = torch.cat([latent_states, s.unsqueeze(1)], dim=1)
+
+            return {
+                "rewards": reward,           # [B*T, horizon]
+                "continues": continues,      # [B*T, horizon]
+                "entropy": entropys,         # [B*T, horizon]
+                "imagination": latent_states,# [B*T, horizon+1, emb_dim]
+                "log_probs": log_probs,      # [B*T, horizon]
+                "real_states": real_states   # [B, T+1, emb_dim]
+            }
 
     # 🎯 Metodo aggiornato: accetta init_action per copiare il comportamento di Dreamer.py
     def _apply_episode_reset(self, state: RSSMState, last_action: torch.Tensor, init_action: torch.Tensor, is_first: torch.Tensor) -> tuple[RSSMState, torch.Tensor]:
