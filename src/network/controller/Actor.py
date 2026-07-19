@@ -75,7 +75,7 @@ class Actor(nn.Module):
             mixed_log_probs = mixed_log_probs.masked_fill(~mask, -1e9)
 
         # init dist
-        dist = OneHotCategorical(logits=mixed_log_probs)
+        dist = OneHotCategorical(probs=mixed_probs)
         
         # STE
         sampled_action = dist.sample()

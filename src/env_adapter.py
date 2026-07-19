@@ -190,6 +190,13 @@ class EnviromentAdapter:
         for key, value in metrics.items():
             self.logger.info(f"Aggregate Metric - {key}: {value:.4f}")
         
+        if self.agent.logger is not None:
+            # Usiamo il global_step dell'agente per allineare questo grafico agli altri
+            current_step = self.agent.global_step
+            self.agent.logger.experiment.add_scalar("Real_Env/episode_return", metrics["mean_reward"], current_step)
+            self.agent.logger.experiment.add_scalar("Real_Env/episode_length", metrics["mean_episode_length"], current_step)
+            self.agent.logger.experiment.add_scalar("Real_Env/max_reward", metrics["max_reward"], current_step)
+        
         self.logger.info(f"Terminated Episodes: {terminated_episodes}/{n_episodes}")
         self.logger.info(f"Truncated Episodes: {truncated_episodes}/{n_episodes}")
         
