@@ -178,7 +178,7 @@ if __name__ == "__main__":
         episode_path = current_bucket / str(idx)
          
         dict2folder(buffer, episode_path)
-        np.savez_compressed(episode_path / "mask_actions.npz", mask=mapper.act_mask)
+        np.savez_compressed(episode_path / "mask_actions.npz", valid_actions_mask=mapper.act_mask)
         # ---------------------------------------------
 
         idx             += 1

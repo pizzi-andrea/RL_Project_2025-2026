@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 doom_scenarios=("VizdoomBasic-v1")
-episodes=(300)
+episodes=(600)
 skip_frame=(4)
 
 sticky=("")

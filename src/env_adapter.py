@@ -170,7 +170,7 @@ class EnviromentAdapter:
             episode.append(transition)
     
             # alloc new episode on the disk
-            episode_path = self.memory_m.alloc_episode(episode, **{"mask": mapper.act_mask})
+            episode_path = self.memory_m.alloc_episode(episode, **{"valid_actions_mask": mapper.act_mask})
             episode.clear()
             
             # accumulate values for metrics

@@ -14,6 +14,8 @@ from typing import Optional
 # RNN network
 from ..dreamer.rssm import RSSM, RSSMState
 from .utils import *
+from .losses import *
+
 from ..adapters import *
 # -------------------------
 # World Model LightningModule - need use REP buffer - remove 
@@ -78,24 +80,17 @@ class Dreamer(L.LightningModule):
         self.burn_in = burn_in
         self.unimix = unimix
 
-        if isinstance(Encoder, str):
-            self.encoder = Encoder.load_from_checkpoint(encoder, map_location='cpu')
-        elif isinstance(encoder, Encoder):
-            self.encoder = encoder
-        elif not encoder:
-            self.encoder = Encoder(model_dim=self.internal_hidden_dim, latent_dim=internal_hidden_dim, rssm_state_dim=self.rssm.hidden_dim)
+        # --- ENCODER ---
+        if encoder is None:
+            self.encoder = Encoder(model_dim=self.internal_hidden_dim, latent_dim=internal_hidden_dim)
         else:
-            assert "No encoder instance"
-
-        
-        if isinstance(decoder, str):
-            self.decoder = Decoder.load_from_checkpoint(encoder, map_location='cpu')
-        elif isinstance(decoder, Decoder):
-            self.decoder = decoder
-        elif not decoder:
+            self.encoder = encoder
+            
+        # --- DECODER ---
+        if decoder is None:
             self.decoder = Decoder(model_dim=self.internal_hidden_dim, world_model_dim=self.rssm.hidden_dim, input_res=self.encoder.input_res)
         else:
-            assert "No encoder instance"
+            self.decoder = decoder
 
         
         # -- encoders adapter
@@ -198,7 +193,7 @@ class Dreamer(L.LightningModule):
     def compute_loss(self, out, batch):
 
         # unpack data
-        mask = batch["mask"]
+
         obs = batch["obs"]           
         rewards = batch["reward"]    
         cont = batch["continue"]         
@@ -219,9 +214,8 @@ class Dreamer(L.LightningModule):
         
         with torch.no_grad():
             user_att = symlog(user_att) # symlog target user attribute
-            #obs = (obs / 255)             # imgs normalization
-            
             two_hot_rewards = twohot(symlog(rewards), self.buckets)  # robust encoding for high variance prediction (rewards model)
+            obs = obs/255
         ######################################################################################
 
         # recostruction world attribute loss
@@ -286,73 +280,95 @@ class Dreamer(L.LightningModule):
             p.requires_grad = True
     
     def configure_optimizers(self):
-        return LaProp(self.parameters(), self.hparams.lr, eps=1e-20)
+        return LaProp(self.parameters(), self.hparams.lr, eps=1e-8)
     
-    def encode(self, obs, user_att): # x_t encoding
-        """Encode observation + world attributes"""
-        return self.encode_obs(obs), self.encode_att(user_att)
-        # -- fuse obs with user att, use simple cat fusion
+
+    # == OBSERVATIONS ====================================================================
     
+
     def encode_obs(self, x):
         x = (x / 255)
         x = self.encoder(x)
-        return x 
+        return x
     
+    def decode_obs(self, x):
+        x = self.decoder(x)
+        return x
+
+    def predict_obs(self, x):
+        x = self.decoder(x)
+        x = torch.sigmoid(x)
+        return x
+
+    # == ====================================================================================
+
+    # == ACTION(a) ============================================================================================
+    def encode_action(self, x):
+        return self.action_encoder(x)
+    
+    # == STATE(s) ==============================================================================================
+    def encode_state(self, h, z):
+        x = torch.cat([h, z], dim=-1)
+        return self.state_encoder(x)
+
+    # ===========================================================================================================
+
+    # == REWARDS ================================================================================================
+
+    def predict_reward(self, x):
+
+        pred_rewards_buckets_log = self.reward_head(x)
+        pred_rewards_buckets_probs = self.softmax(pred_rewards_buckets_log)
+        expected_rewards_symlog = torch.sum(pred_rewards_buckets_probs * self.buckets, dim=-1)
+        pred_rewards = symexp(expected_rewards_symlog)
+        return pred_rewards
+
+    
+    def decode_reward(self, x):
+        """Predict reward in differentiable world"""
+        pred_rewards_buckets_log = self.reward_head(x)
+        return pred_rewards_buckets_log
+    
+    # == ====================================================================================================
+    
+    
+   
+    # == CONTINUE FLAG #########################################################################################à
+    def predict_continue(self, x):
+        """
+        predict continue flags, return both values logits and value to obtain maximum stability in the training
+        """
+        logits = self.cont_head(x).squeeze(-1)
+        probs = torch.sigmoid(logits) 
+        
+        
+        return probs
+    
+    def decode_continue(self, x):
+        return self.cont_head(x).squeeze(-1)
+    
+    # == =====================================================================================================
+    
+    
+    # == USER ATTRIBUTES =========================================
     def encode_att(self, x):
         x = symlog(x) 
         x = self.att_encoder(x)
 
         return x
 
-    def encode_action(self, x):
-        return self.action_encoder(x)
-    
-    def encode_state(self, h, z):
-        x = torch.cat([h, z], dim=-1)
-        return self.state_encoder(x)
 
- 
-    def predict_reward(self, feat):
-        """Predict reward in differentiable world"""
-        # 1. Calcola i logit (pesi non normalizzati) per ogni bucket
-        pred_rewards_buckets_log = self.reward_head(feat)
-        
-        # 2. Converti i logit in probabilità tramite softmax
-        pred_rewards_buckets_probs = self.softmax(pred_rewards_buckets_log)
-
-        # 3. Calcola l'aspettativa della reward nello spazio symlog.
-        # Effettuiamo il prodotto scalare (somma ponderata) tra le probabilità
-        # e i valori target (self.buckets) lungo l'ultima dimensione[cite: 7].
-        expected_rewards_symlog = torch.sum(pred_rewards_buckets_probs * self.buckets, dim=-1)
-        
-        # 4. Ritorna nello spazio lineare tramite symexp
-        pred_rewards = symexp(expected_rewards_symlog)
-        
-        # Restituisci sempre sia i logit che la reward predetta, come richiesto
-        return pred_rewards_buckets_log, pred_rewards
-    
-  
-
-    def predict_continue(self, feat):
-        """
-        predict continue flags, return both values logits and value to obtain maximum stability in the training
-        """
-        logits = self.cont_head(feat).squeeze(-1)
-        probs = torch.sigmoid(logits) 
-        
-        
-        return logits, probs
-    
-    def predict_obs(self, s):
-        """Recostruct observed state"""
-        
-        obs = self.decoder(s)
-        
-        return obs 
-    
-    def predict_user_att(self, feat):
+    def predict_user_att(self, x):
         """Predict attribute of differentiable world"""
-        return self.att_head(feat)
+        pred_att_symlog = self.att_head(x)
+        pred_att_real = symexp(pred_att_symlog)
+        
+        return  pred_att_real
+    
+    def decode_user_att(self, x):
+        return self.att_head(x)
+    
+    # == =============================================================0
 
     def _get_loss_for_batch(self, episodes_idx, loss_episodes):
         """get loss for batch and index episodes in batch"""
@@ -448,54 +464,57 @@ class Dreamer(L.LightningModule):
         actions  = train_data["action"]
         att_user = train_data["user_att"]
         mask     = train_data["mask"]
-        is_first = train_data["is_first"]   # [B] Tensor booleano
+        is_first = train_data["is_first"]
 
         B, T   = obs.shape[0], obs.shape[1]
         device = obs.device
 
-        state       = self.rssm.init_state(B, device=device)
-        last_action = torch.zeros_like(actions[:, 0])
+        state = self.rssm.init_state(B, device=device)
+        
+        # Cold start iniziale dinamico basato sulla presenza di burn-in
+        if burn_in_data is not None:
+            last_action = burn_in_data["action"][:, 0].clone()
+            last_att    = burn_in_data["user_att"][:, 0].clone()
+        else:
+            last_action = actions[:, 0].clone()
+            last_att    = att_user[:, 0].clone()
         
         h_dim = self.rssm.h_dim
         L, K  = self.rssm.L, self.rssm.K
 
-        # --- 1. Fase di Burn-in Dinamico (Rispetta il Padding) ---
+        # --- 1. Fase di Burn-in ---
         if burn_in_data is not None:
             with torch.no_grad():
                 for t in range(burn_in_data["obs"].shape[1]):
-                    # Maschera al tempo t: 1 = informazione, 0 = padding
-                    m_t = burn_in_data["mask"][:, t].unsqueeze(-1) # [B, 1]
+                    m_t = burn_in_data["mask"][:, t].unsqueeze(-1)
                     
-                    x_t, att_t = self.encode(burn_in_data["obs"][:, t], burn_in_data["user_att"][:, t])
-                    a_t = self.encode_action(last_action)
+                    x_t   = self.encode_obs(burn_in_data["obs"][:, t])
+                    att_t = self.encode_att(last_att)
+                    a_t   = self.encode_action(last_action)
                     
-                    # Calcolo del prossimo stato potenziale
-                    state, _, _ = self.rssm.observe_step(
-                        state, 
-                        a_t, 
-                        x_t, 
-                        att_t, 
-                        burn_in_data["mask"][:, t]
-                    )
+                    state, _, _ = self.rssm.observe_step(state, a_t, x_t, att_t, burn_in_data["mask"][:, t])
                     
-                    
-                    # Aggiorniamo l'azione solo se il frame corrente era valido
                     last_action = torch.where(m_t.bool(), burn_in_data["action"][:, t], last_action)
+                    last_att    = torch.where(m_t.bool(), burn_in_data["user_att"][:, t], last_att)
 
-        # --- 2. Risoluzione Conflitto is_first ---
-        # Se is_first è True, la sequenza di training è l'inizio di un episodio (t=0).
-        # Resettiamo lo stato a 'fresh' ignorando qualsiasi riscaldamento precedente.
-        state, last_action = self._apply_episode_reset(state, last_action, is_first)
+        # --- 2. Reset Selettivo ---
+        state, last_action, last_att = self._apply_episode_reset(
+            state, last_action, last_att, actions[:, 0], att_user[:, 0], is_first
+        )
        
-        # --- 3. Fase di Training (Loop Principale) ---
+        # --- 3. Fase di Training ---
         post_h       = torch.zeros(B, T, h_dim, device=device)
         post_logits  = torch.zeros(B, T, L, K,  device=device)
         prior_logits = torch.zeros(B, T, L, K,  device=device)
         post_z       = torch.zeros(B, T, L*K , device=device)
 
         for t in range(T):
-            x_t, att_t = self.encode(obs[:, t], att_user[:, t])
-            a_t = self.encode_action(last_action)
+            m_t = mask[:, t].unsqueeze(-1)
+            
+            x_t   = self.encode_obs(obs[:, t])
+            att_t = self.encode_att(last_att)
+            a_t   = self.encode_action(last_action)
+            
             state, prior_logits_t, post_logits_t = self.rssm.observe_step(state, a_t, x_t, att_t, mask[:, t])
             
             post_h[:,  t]      = state.h
@@ -503,55 +522,46 @@ class Dreamer(L.LightningModule):
             post_logits[:,  t] = post_logits_t   
             prior_logits[:, t] = prior_logits_t  
 
-            last_action = actions[:, t]
+            last_action = torch.where(m_t.bool(), actions[:, t], last_action)
+            last_att    = torch.where(m_t.bool(), att_user[:, t], last_att)
 
         # --- 4. Predizioni Finali ---
         s_t = self.encode_state(post_h, post_z) 
         
-        x_hat        = self.predict_obs(s_t)             
-        r_hat_log, _ = self.predict_reward(s_t)             
-        att_hat      = self.predict_user_att(s_t)                
-        c, _            = self.predict_continue(s_t) 
-
         return {
-            "x_hat": x_hat,
-            "c": c,
+            "x_hat": self.decode_obs(s_t),
+            "c": self.decode_continue(s_t),
             "post_logits": post_logits,
             "prior_logits": prior_logits,
-            "att_hat": att_hat,
-            "buckets_log": r_hat_log
+            "att_hat": self.decode_user_att(s_t),
+            "buckets_log": self.decode_reward(s_t)
         }
-
 
     def _apply_episode_reset(
         self,
-        state: RSSMState,
+        state,
         last_action: torch.Tensor,
-        is_first: torch.Tensor,        # [B]
-    ) -> tuple[RSSMState, torch.Tensor]:
-        """
-        Episodio nuovo → stato fresco da init_state, non moltiplicazione per maschera.
-        Rende l'intento esplicito e non si confonde con il padding dell'RSSM.
-        """
+        last_att: torch.Tensor,
+        init_action: torch.Tensor,
+        init_att: torch.Tensor,
+        is_first: torch.Tensor,
+    ):
         if is_first is None or not is_first.any():
-            return state, last_action
+            return state, last_action, last_att
 
-        # Stato pulito di riferimento
         fresh = self.rssm.init_state(state.h.shape[0], device=state.h.device)
 
-        # is_first=1 → prendi da fresh, is_first=0 → tieni state
-        # stop-gradient: is_first non partecipa al grafo computazionale
         with torch.no_grad():
-            first  = is_first.float().unsqueeze(-1)          # [B, 1]
-            first3 = first.unsqueeze(-1)                     # [B, 1, 1]
+            first  = is_first.float().unsqueeze(-1)
+            first3 = first.unsqueeze(-1)
 
-        state.h        = torch.where(first.bool(),  fresh.h,        state.h)
-        state.z = torch.where(first3.bool(), fresh.z, state.z)
-        last_action    = torch.where(first.bool(),
-                                    torch.zeros_like(last_action),
-                                    last_action)
+        state.h     = torch.where(first.bool(), fresh.h, state.h)
+        state.z     = torch.where(first3.bool(), fresh.z, state.z)
+        
+        last_action = torch.where(first.bool(), init_action, last_action)
+        last_att    = torch.where(first.bool(), init_att, last_att)
 
-        return state, last_action
+        return state, last_action, last_att
      
         
     

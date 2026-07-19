@@ -16,6 +16,7 @@ from dda import DynamicDataAllocator
 from env_adapter import EnviromentAdapter
 from network.controller.Policy import DreamerAgent
 from network.encoder.encoders import Encoder 
+from network.encoder.decoders import Decoder 
 from network.worldModel.dreamer import Dreamer
 from network.adapters import PERAdapter
 from torchvision.transforms.v2 import *
@@ -29,6 +30,7 @@ from lightning.pytorch.callbacks import RichProgressBar
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pygame.pkgdata")
 warnings.filterwarnings("ignore", message="Detected screen format CRCGCB")
+os.environ["ALSOFT_LOGLEVEL"] = "0"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
  # dataset preprocess
 
@@ -94,11 +96,25 @@ def main():
     # ===============================================================
     
   
-    encoder_model = Encoder(latent_dim=config["encoder_config"]["latent_dim"], model_dim=config["encoder_config"]["model_dim"])
-   
-        
+    encoder_model = Encoder(
+    latent_dim=config["encoder_config"]["latent_dim"], 
+    model_dim=config["encoder_config"]["model_dim"]
+    )
+
+    decoder_model = Decoder(
+        model_dim=config["encoder_config"]["model_dim"], 
+        world_model_dim=config["rssm_config"]["rssm_latent_dim"], 
+        input_res=(config["global_config"]["img_size_h"], config["global_config"]["img_size_l"])
+    )
+
     if args.load_weights and Path(config["global_config"]["dreamer_w"]).exists():
-        rssm_model = Dreamer.load_from_checkpoint(config["global_config"]["dreamer_w"],
+        # 2. Passa le istanze direttamente a load_from_checkpoint.
+        # Lightning assegnerà i pesi dell'encoder e del decoder del checkpoint 
+        # direttamente a queste istanze.
+        rssm_model = Dreamer.load_from_checkpoint(
+                checkpoint_path     =   config["global_config"]["dreamer_w"],
+                encoder             =   encoder_model,
+                decoder             =   decoder_model,
                 action_dim          =   config["global_config"]["action_shape"], 
                 att_dim             =   config["global_config"]["att_shape"], 
                 decode_shape        =   (config["global_config"]["img_channels"], config["global_config"]["img_size_h"], config["global_config"]["img_size_l"]),
@@ -106,8 +122,8 @@ def main():
                 beta_dyn            =   config["rssm_config"]["beta_dyn"],
                 beta_pred           =   config["rssm_config"]["beta_pred"],
                 beta_rep            =   config["rssm_config"]["beta_rep"],
-             
-                burn_in             =    config["rssm_config"]["burn_in"],
+                
+                burn_in             =   config["rssm_config"]["burn_in"],
                 free_nats           =   config["rssm_config"]["free_nats"],
                 unimix              =   config["rssm_config"]["unimix"],
                 internal_hidden_dim =   config["rssm_config"]["common_latent_dim"],
@@ -124,6 +140,7 @@ def main():
                 alpha_continue      =   config["rssm_config"]["a_cont"],            
         )
     else:
+        # 3. Lo stesso vale per l'inizializzazione standard (from scratch)
         rssm_model = Dreamer(
                 action_dim          =   config["global_config"]["action_shape"], 
                 att_dim             =   config["global_config"]["att_shape"], 
@@ -132,8 +149,9 @@ def main():
                 beta_dyn            =   config["rssm_config"]["beta_dyn"],
                 beta_pred           =   config["rssm_config"]["beta_pred"],
                 beta_rep            =   config["rssm_config"]["beta_rep"],
-                encoder                 =   encoder_model,
-                burn_in             =    config["rssm_config"]["burn_in"],
+                encoder             =   encoder_model,
+                decoder             =   decoder_model,
+                burn_in             =   config["rssm_config"]["burn_in"],
                 free_nats           =   config["rssm_config"]["free_nats"],
                 unimix              =   config["rssm_config"]["unimix"],
                 internal_hidden_dim =   config["rssm_config"]["common_latent_dim"],
@@ -148,7 +166,7 @@ def main():
                 alpha_att           =   config["rssm_config"]["a_att"],
                 alpha_reward        =   config["rssm_config"]["a_rew"],
                 alpha_continue      =   config["rssm_config"]["a_cont"],
-        ) 
+    )
     
     if args.load_weights and Path(config["global_config"]["policy_w"]).exists():
         agent_model = DreamerAgent.load_from_checkpoint(config["global_config"]["policy_w"], 
@@ -162,8 +180,10 @@ def main():
                     buckets             =   config["policy_config"]["buckets"],
                     hidden_dim          =   config["policy_config"]["hidden_dim"],
                     unimix              =   config["policy_config"]["unimix"],
-                    ema_decay           =   config["policy_config"]["ema_decay"],
-                    ema_epsilon         =   config["policy_config"]["ema_epsilon"],
+                    gamma               =   config["policy_config"]["gamma"],
+                    critic_ema_decay    =   config["policy_config"]["critic_ema_decay"],
+                    retnorm_decay       =   config["policy_config"]["retnorm_decay"],
+                    retnorm_limit       =   config["policy_config"]["retnorm_limit"],
                     min_buckets         =   config["policy_config"]["min_buckets"],
                     max_buckets         =   config["policy_config"]["max_buckets"],
                     #preprocess_callback =   base_callback,
@@ -181,8 +201,10 @@ def main():
                     buckets             =   config["policy_config"]["buckets"],
                     hidden_dim          =   config["policy_config"]["hidden_dim"],
                     unimix              =   config["policy_config"]["unimix"],
-                    ema_decay           =   config["policy_config"]["ema_decay"],
-                    ema_epsilon         =   config["policy_config"]["ema_epsilon"],
+                    gamma               =   config["policy_config"]["gamma"],
+                    critic_ema_decay    =   config["policy_config"]["critic_ema_decay"],
+                    retnorm_decay       =   config["policy_config"]["retnorm_decay"],
+                    retnorm_limit       =   config["policy_config"]["retnorm_limit"],
                     min_buckets         =   config["policy_config"]["min_buckets"],
                     max_buckets         =   config["policy_config"]["max_buckets"],
                     #preprocess_callback=base_callback,

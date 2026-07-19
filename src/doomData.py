@@ -97,7 +97,7 @@ class EpisodicDoomDataset(Dataset):
      
         priority = self.per_indexs[index]
         with np.load(episode_path_m.parent.joinpath("mask_actions.npz")) as data:
-            mask_action = data["mask"]
+            valid_actions_mask = data["valid_actions_mask"]
         
         obs_dir = episode_path_m.parent / "obs"
         last_ok = None
@@ -124,7 +124,7 @@ class EpisodicDoomDataset(Dataset):
             "done": dones,
             "user_att": att_player,
             "priority_idx": priority,
-            "mask_action": mask_action,
+            "valid_actions_mask": valid_actions_mask,
             "is_first": is_first_val
         }
 
@@ -147,7 +147,7 @@ def collate_fn(batch):
     batch_done = [torch.tensor(b["done"]) for b in batch]
     batch_user_att = [torch.tensor(b["user_att"]) for b in batch]
     batch_idx = torch.stack( [torch.tensor(b["priority_idx"],dtype=torch.uint32) for b in batch])
-    batch_mask = torch.stack( [torch.as_tensor(b["mask_action"],dtype=torch.bool) for b in batch])
+    batch_mask = torch.stack( [torch.as_tensor(b["valid_actions_mask"],dtype=torch.bool) for b in batch])
     batch_weight = torch.stack([torch.as_tensor(b["weight"],dtype=torch.float32) for b in batch])
     batch_is_first = torch.stack([torch.as_tensor(b["is_first"],dtype=torch.bool) for b in batch])
     
@@ -158,7 +158,8 @@ def collate_fn(batch):
     done = pad_sequence(batch_done, batch_first=True, padding_value=1).float()
     user_att = pad_sequence(batch_user_att, batch_first=True).float()
 
-    mask = pad_sequence([torch.ones(len(b), dtype=torch.float32) for b in batch_obs], batch_first=True)
+    temporal_mask = pad_sequence([torch.ones(len(b), dtype=torch.float32) for b in batch_obs], batch_first=True)
+    valid_actions_mask = batch_mask.unsqueeze(1).expand(-1, obs.shape[1], -1).clone()
     #print(action.shape)
     #print(reward.shape)
     #print(done.shape)
@@ -169,11 +170,11 @@ def collate_fn(batch):
         "reward": reward,
         "done": done,
         "continue": 1.0 - done,
-        "mask": mask,
+        "mask": temporal_mask,
+        "valid_actions_mask": valid_actions_mask,
         "user_att": user_att,
         "priority_idx": batch_idx,
         "weight": batch_weight,
-        "mask_action": batch_mask,
         "is_first": batch_is_first
     }
 
