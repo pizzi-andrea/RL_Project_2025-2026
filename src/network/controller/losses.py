@@ -9,14 +9,18 @@ from collections import deque
 
 def critic_loss(v_hat_log, target_twohot, c_soft):
     """
-    🎯 FIX DERIVATO DA RAY: La loss si occupa solo della classificazione dei bucket.
-    La regolarizzazione avviene direttamente nello spazio dei parametri del network.
+    Critic loss based on twohot encoding for high variance targets,
+    both values v_hat_logs and target_twohot muste be in symlog space
     """
+
+    # == transform raw logits in probs
     v_hat_log_probs = F.log_softmax(v_hat_log, dim=-1)
     
+    # == compute cross entropy in symlog space (over buckets)
     per_step_loss = -(target_twohot * v_hat_log_probs).sum(dim=-1)
     weighted_loss = per_step_loss * c_soft
     
+    # == aggregate results ignoring padding
     lengths = c_soft.sum(dim=1).clamp(min=1.0)
     final_loss = weighted_loss.sum(dim=1) / lengths
     
@@ -24,13 +28,19 @@ def critic_loss(v_hat_log, target_twohot, c_soft):
 
 
 def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, c_soft, entropy_scale=3e-4, mask=None):
+    """"Normalize actor loss suitable for multi-enviroment rewards"""
+
+    # == normalize td_return to avoid gradient explosion 
     offset, invscale = ema_scaler(td_return, mask)
     
+    # == scale all values 
     scaled_targets = (td_return - offset) / invscale
     scaled_preds = (critic_values - offset) / invscale
-  
+    
+    # == compute normalized avantages 
     advantage = (scaled_targets - scaled_preds).detach()
     
+    # == compute loss value
     per_step_objective = (advantage * action_log_prob) + (entropy_scale * entropy)
 
     weighted_objective = per_step_objective * c_soft
@@ -38,6 +48,7 @@ def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, c
     lengths = c_soft.sum(dim=1).clamp(min=1.0)
     final_loss = -( (weighted_objective.sum(dim=1) / lengths).mean() )
     
+    # == update EMA scaler
     with torch.no_grad():
         adv_metric = ((advantage * action_log_prob * c_soft).sum(dim=1) / lengths).mean().item()
         ent_metric = ((entropy_scale * entropy * c_soft).sum(dim=1) / lengths).mean().item()

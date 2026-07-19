@@ -15,7 +15,11 @@ from .Actor import Actor
 from .Critic import Critic
 
 class DreamerAgent(L.LightningModule):
-    """Agent based on Dreamer model"""
+    """
+    Actor-Critic agent based on REINFORCE algorithm with robust critic policy estimator
+    Args:
+        
+    """
     def __init__(self, dreamer_model: Dreamer | str, 
                  buckets: int = 255,
                  min_buckets: int = -20,
@@ -53,6 +57,7 @@ class DreamerAgent(L.LightningModule):
         self.lambd = lambd
         self.gamma = gamma
         
+        # prepare EMA scaler
         self.ema = EMAScalar(decay=retnorm_decay, eps=retnorm_limit)
         
         self.emb_dim = self.dreamer_model.state_dim
@@ -102,10 +107,9 @@ class DreamerAgent(L.LightningModule):
         entropy = output["entropy"]
         a_hat_log_probs = output["log_probs"] 
 
-        # === 1. Calcolo Target e Lambda Returns (Spazio Lineare) ===
+    
         with torch.no_grad():
-            # 🎯 FIX DERIVATO DA RAY: I target si calcolano usando la rete online veloce
-            # Otteniamo i valori decompressi per il calcolo lineare dei lambda return[cite: 4]
+            # obtain value in linear space for lambda return 
             v_hat_target_linear = self.critic.predict_value(states_hat)
             v_hat_target_real_linear = self.critic.predict_value(states_real)
 
@@ -125,13 +129,16 @@ class DreamerAgent(L.LightningModule):
                 gamma=self.gamma
             )
 
-            # Compressione e categorizzazione dei target per la loss del critico
+            
+            # transform values in symlog space for loss 
             two_hot_lambda_return = twohot(symlog(lambda_return), self.critic.buckets)
             two_hot_lambda_return_real = twohot(symlog(lambda_return_real), self.critic.buckets)
 
         # === 2. Actor Loss (Baseline nello Spazio Lineare) ===
-        # 🎯 FIX DERIVATO DA RAY: L'actor sfrutta il critic corrente come baseline stabile
+        
+
         v_hat_critic_linear = self.critic.predict_value(states_hat[:, :-1]).detach()
+        
         actor_loss_v, ema_scale, advantage, _ = actor_loss(
             td_return=lambda_return, 
             critic_values=v_hat_critic_linear, 
@@ -143,16 +150,14 @@ class DreamerAgent(L.LightningModule):
             mask=c_hat    
         )
 
-        # === 3. Critic Loss (Predizioni nello Spazio Compresso dei Bucket) ===
-        # Otteniamo i logits generati sullo spazio compresso per la cross-entropy[cite: 4]
         v_hat_log_critic = self.critic.decode_value(states_hat[:, :-1])
         v_hat_log_critic_real = self.critic.decode_value(states_real[:, :-1])
 
-        # Calcolo delle cross-entropy pulite[cite: 3]
+      
         critic_l = critic_loss(v_hat_log_critic, two_hot_lambda_return, c_hat)
         critic_r = critic_loss(v_hat_log_critic_real, two_hot_lambda_return_real, continue_real)
         
-        # 🎯 FIX DERIVATO DA RAY: Regolarizzazione L2 basata sui Pesi dei network
+        # complex regulation need to stabilize mobile target learning 
         weight_reg = 0.0
         for p, p_target in zip(self.critic.parameters(), self.target.parameters()):
             weight_reg += torch.sum((p - p_target.detach()) ** 2)
@@ -160,7 +165,7 @@ class DreamerAgent(L.LightningModule):
         critic_loss_v = critic_l + 0.3 * critic_r + 0.01 * weight_reg
         loss = critic_loss_v + actor_loss_v
 
-        # Blocco Ottimizzazione Manuale
+        # == OPTIMIZATION ============================================================
         opt_actor, opt_critic = self.optimizers()
         opt_actor.zero_grad()
         opt_critic.zero_grad()
@@ -172,8 +177,9 @@ class DreamerAgent(L.LightningModule):
         
         opt_actor.step()
         opt_critic.step()
-
-        # Metrics
+        # ===============================================================================
+        
+        # == Metrics ====================================================================
         lengths = c_hat.sum(dim=1).clamp(min=1)
         lengths_r = continue_real.sum(dim=1).clamp(min=1)
 
@@ -201,7 +207,9 @@ class DreamerAgent(L.LightningModule):
         return {
             "loss": loss,
             "imagination": output["imagination"].detach(), 
-            "burn": obs.detach()
+            "burn": obs.detach(),
+            "len_r": lengths_r,
+            "len_hat": lengths
         }
     
     @torch.no_grad()
@@ -209,22 +217,39 @@ class DreamerAgent(L.LightningModule):
         self.ema.eval()
         self.update_target()
         
+        
+        len_hat = int(outputs["len_hat"].item()) if torch.is_tensor(outputs["len_hat"]) else int(outputs["len_hat"])
+        len_r = int(outputs["len_r"].item()) if torch.is_tensor(outputs["len_r"]) else int(outputs["len_r"])
+        
+        
         latent_space_sample = outputs["imagination"][0].unsqueeze(0) 
-        imagined_frames = self.dreamer_model.predict_obs(latent_space_sample)
-        imagined_frames = imagined_frames.squeeze(0) 
+        imagined_frames = self.dreamer_model.predict_obs(latent_space_sample[:, :len_hat - 1, :, :])
+        imagined_frames = imagined_frames.squeeze(0)  # Output atteso: [Time, Canali, Altezza, Larghezza]
 
+        
         real = outputs["burn"][0] 
+        real = real[:len_r - 1, :, :, :] # (4D: T, C, H, W)
 
+       
         if self.global_step % 100 == 0:
             log_dir = self.logger.log_dir if (self.logger and hasattr(self.logger, 'log_dir')) else "."
             make_video(imagined_frames, f"{log_dir}/imagined_{self.global_step}.avi", fps=10)
             print(f"new video save in {log_dir}")
 
+
         if batch_idx == 0 and self.logger is not None:
             burning_steps = min(self.burn_in, real.shape[0])
-            burning = (real[:burning_steps] / 255.0) 
+            burning = real[:burning_steps]
             
+       
+            if burning.dtype == torch.uint8:
+                burning = burning.float() / 255.0
+            if imagined_frames.dtype == torch.uint8:
+                imagined_frames = imagined_frames.float() / 255.0
+                
+          
             black_separator = torch.zeros_like(burning[0]).unsqueeze(0)
+          
             comparison = torch.cat([burning, black_separator, imagined_frames], dim=0)
             
             grid = torchvision.utils.make_grid(comparison, nrow=comparison.shape[0])

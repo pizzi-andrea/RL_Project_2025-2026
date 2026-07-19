@@ -1,14 +1,18 @@
 from torch import nn
 from .utils import *
 class Critic(nn.Module):
-    """Network for Critic rule implemented with support at Robust predictor method"""
+    """Critic Network use to estimate Value functions encoded in buckets spaces and linear spaces"""
     def __init__(self, dim_state, num_buckets, min_buckets=-20, max_buckets=20, hidden_dim=1024):
+        """
+        """
         super().__init__()
         
+        # == buckets parameters
         self.num_buckets = num_buckets
         self.min_buckets = min_buckets
         self.max_buckets = max_buckets
 
+        # == register buckets as buffer for efficiency
         self.register_buffer("buckets", torch.linspace(min_buckets, max_buckets, num_buckets)) 
         
         self.net = self._build_mlp(dim_state, hidden_dim)
@@ -24,26 +28,30 @@ class Critic(nn.Module):
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
    
-    def _build_mlp(self, dim_state, hidden_dim):
-        """Helper per costruire MLP senza bias nei layer nascosti e con LayerNorm"""
+    def _build_mlp(self, dim_state:int, hidden_dim:int, eps:float=0.001):
+        """
+        define depth nn for value prediction
+        Args:
+            dim_state(int):  dimension of world model state
+            hidden_dim(int): dimensione of hidden layer
+            eps(float): epsilon parameter for LayerNorm 
+        """
+
         return nn.Sequential(
             nn.Linear(dim_state, hidden_dim * 2, bias=False),
-            nn.LayerNorm(hidden_dim * 2, eps=0.001),
+            nn.LayerNorm(hidden_dim * 2, eps=eps),
             nn.SiLU(),
             nn.Linear(hidden_dim * 2, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim, eps=0.001),
+            nn.LayerNorm(hidden_dim, eps=eps),
             nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim, eps=0.001),
+            nn.LayerNorm(hidden_dim, eps=eps),
             nn.SiLU(),
         )
 
-    # == LOGICA SEPARATA COMPRESSIONE / LINEARE =================================
-
     def decode_value(self, x):
         """
-        Produce i logit grezzi nello spazio compresso dei bucket.
-        Da utilizzare per il calcolo della critic_loss.
+        Raw decode function, return estimated Value in buckets space (sylog)
         """
         x = self.net(x)
         pred_values_log = self.buckets_proj(x)
@@ -51,28 +59,20 @@ class Critic(nn.Module):
 
     def predict_value(self, x):
         """
-        Produce il valore atteso nello spazio lineare.
-        Da utilizzare per il calcolo dei lambda returns e dell'advantage.
+        Predict Value from given state x (linear)
         """
-        # 1. Ottieni i logit e le probabilità
+        # 1.logits + probs
         pred_values_log = self.decode_value(x)
         pred_values_prob = self.softmax(pred_values_log)
         
-        # 2. Calcola il valore atteso nello spazio compresso (symlog space)
+        # 2. expected value in symlog space
         v_symlog = (pred_values_prob * self.buckets).sum(dim=-1)
         
-        # 3. Decomprimi il valore nello spazio lineare
+        # 3. linear value 
         v_linear = symexp(v_symlog)
         return v_linear
 
-    # ============================================================================
-
     def forward(self, x):
-        """
-        Mantiene la compatibilità con il codice legacy qualora tu debba
-        estrarre temporaneamente entrambi i valori (logits e symlog).
-        Consiglio di passare gradualmente all'uso esplicito di decode_value e predict_value.
-        """
         pred_values_log = self.decode_value(x)
         pred_values_prob = self.softmax(pred_values_log)
         v_symlog = (pred_values_prob * self.buckets).sum(dim=-1)
