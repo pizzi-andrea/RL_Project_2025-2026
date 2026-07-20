@@ -3,7 +3,7 @@ import torch
 import gymnasium
 from pathlib import Path
 
-from dd_wrapper import Wrapper_vz_basic
+from dd_wrapper import EnviromentWrapperBuilder
 from network.controller.Policy import DreamerAgent
 from torch import no_grad
 from dda import DynamicDataAllocator
@@ -69,7 +69,7 @@ class EnviromentAdapter:
         }
     
     @no_grad()
-    def act_in_env(self, enviroment_id: str, n_episodes: int = 1, frame_skip: int = 1, max_length: int = 500, graphics: bool = False, preprocess=None, post_process=None):
+    def act_in_env(self, enviroment_id: str, n_episodes: int = 1, frame_skip: int = 1, max_length: int = 500, graphics: bool = False, preprocess=None, **args):
         """
         bridge function to run the Dreamer agent in a VizDoom environment and collect metrics.
         """
@@ -77,23 +77,9 @@ class EnviromentAdapter:
         render_mode = "human" if graphics else "rgb_array"
         cfg_path = load_cfg_file(enviroment_id)
 
-        if not cfg_path.exists():
-            self.logger.error(f"Configuration file for {enviroment_id} environment not found in {cfg_path}")
-            raise FileNotFoundError(str(cfg_path))
-        else:
-            self.logger.info(f"Configuration file for {enviroment_id} environment found in {cfg_path}")
+        env = EnviromentWrapperBuilder.get_env_from_id(enviroment_id, render_mode, frame_skip, **args)
 
-        env_raw = gymnasium.make(
-            enviroment_id,
-            render_mode=render_mode,
-            frame_skip=frame_skip,
-            max_buttons_pressed=1,
-            max_episode_steps=max_length,
-            scenario_config_file=str(cfg_path)
-        )
-
-        #env = Wrapper_vz_basic(env_raw, 0.05)
-        env = env_raw
+       
         mapper = DoomMap(env)
         
         episode_rewards = []
@@ -110,9 +96,7 @@ class EnviromentAdapter:
             
             # == init episode variables
             game, _ = env.reset()
-            current_obs = game["screen"]
-            current_obs = current_obs[100:, 54:267]
-            s = post_process(current_obs) if post_process is not None else current_obs
+            s = game["screen"]
             att = mapper.stats_local2global(game["gamevariables"])
             act = mapper.action_local2global(0)
             local_action_hot = [v for v in act.values()]
@@ -153,8 +137,6 @@ class EnviromentAdapter:
                 done = terminated or truncated
                 
                 s = game_next["screen"]
-                s = s[100:, 54:267]
-                s = post_process(s) if post_process is not None else s
                 att = mapper.stats_local2global(game_next["gamevariables"])
                 
                 

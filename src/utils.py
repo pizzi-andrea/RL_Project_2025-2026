@@ -12,7 +12,7 @@ def create_video_from_frames(input_folder, output_path, fps=30):
     images = sorted([Path(img) for img in os.listdir(input_folder) if img.endswith((".png", ".jpg", ".jpeg"))])
     images.sort(key=lambda f: int(Path(f).stem))
     if not images:
-        print("Nessuna immagine trovata nella cartella.")
+       
         return
     input_folder = Path(input_folder)
 
@@ -24,14 +24,14 @@ def create_video_from_frames(input_folder, output_path, fps=30):
     fourcc = cv.VideoWriter_fourcc(*'mp4v') 
     video_writer = cv.VideoWriter(output_path, fourcc, fps, (width, height))
 
-    print(f"Creazione video in corso: {len(images)} frame...")
+    print(f"wait ...: {len(images)} frame...")
     
     for image in images:
         img_path = input_folder.joinpath(str(image))
         video_writer.write(cv.imread(str(img_path)))
 
     video_writer.release()
-    print(f"Video salvato con successo in: {str(output_path)}")
+    print(f"video saved in: {str(output_path)}")
 
 
 
@@ -46,7 +46,14 @@ def load_cfg_file(env_name:str) -> Path:
             raise ValueError("cfg not found")
         
     relative =  Path("../configs") / f"{name}.cfg"
-    return relative.resolve()
+    absolute = relative.resolve()
+    if not relative.exists():
+        print(f"configuration file for {str(absolute)} enviroment not found")
+        raise FileNotFoundError(str(relative))
+    else:
+        print(f"configuration file for {env_name} enviroment found in {str(absolute)}")
+    
+    return absolute
 
 def configure_logger(process_name: str):
     logging.basicConfig(

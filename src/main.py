@@ -281,7 +281,7 @@ def main():
             policy_trainer.fit(agent_model, train_dataloaders=policy_train_loader)
         
             for env, n in zip(config["global_config"]["envs"], config["global_config"]["envs_episodes"]):
-                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=config["global_config"]["skip_frame"], max_length=config["global_config"]["max_episode_length"], preprocess=ObservationTransformation(ft='pt'), post_process=ObservationTransformation(obs_size=(64,64)))
+                reword, best_path = envs.act_in_env(env, n_episodes=n, frame_skip=config["global_config"]["skip_frame"], max_length=config["global_config"]["max_episode_length"], preprocess=ObservationTransformation(ft='pt'), resolution_w=obs_size[0], resolution_h=obs_size[1])
                 log.info(f"mean reword collected by policy {reword} in env {env}")
                 create_video_from_frames(best_path.joinpath("obs"), validation_log.joinpath(f"{env}_{epoch}.mp4"), 15) # save best video
                 

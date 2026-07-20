@@ -39,25 +39,14 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    cfg = load_cfg_file(args.env)
-
-    if not cfg.exists():
-        logger.error("configuration file for %s enviroment not found", args.env)
-        raise FileNotFoundError(str(cfg))
-    else:
-        logger.info("configuration file for %s enviroment found in %s", args.env, str(cfg) )
-
-    env_raw = gymnasium.make(
+    env = EnviromentWrapperBuilder.get_env_from_id(
         args.env,
-        render_mode="rgb_array",
-        frame_skip=args.skip_frame,
-        max_buttons_pressed=1,
-        max_episode_steps=args.horizon,
-        scenario_config_file=str(cfg)
+        gmode="rgb_array",
+        skip_frame=args.skip_frame,
+        resolution_h=args.resolution_h,
+        resolution_w=args.resolution_w,
+        crop=args.crop
     )
-
-    #env = Wrapper_vz_basic(env_raw, 0.05)
-    env = env_raw
 
     sticky = 4 if args.sticky else 0
     agent  = Random_Policy(env.action_space, sticky)
@@ -104,11 +93,8 @@ if __name__ == "__main__":
         game, _   = env.reset()
         s         = game["screen"]
         game_info = game["gamevariables"]
+      
         
-        if args.crop:
-            s = s[100:, 54:267]
-        
-        s = cv.resize(s, (args.resolution_w, args.resolution_h), interpolation=cv.INTER_NEAREST)
         act = mapper.action_local2global(0)
         att = mapper.stats_local2global(game_info)
         done = False
@@ -147,10 +133,6 @@ if __name__ == "__main__":
             done           = terminated or truncated
             att = mapper.stats_local2global(game_info_next)
 
-            if args.crop:
-                s_next = s_next[100:, 54:267]
-            s = cv.resize(s_next, (args.resolution_w, args.resolution_h), interpolation=cv.INTER_NEAREST)
-           
             game_info = game_info_next
             ids      += 1
         
@@ -191,6 +173,6 @@ if __name__ == "__main__":
         episode_cc += 1
         buffer.clear()
     
-    logger.info("generation end with %i episoded ended with success and %i failed", episode_cc, episode_cc - episode_done)
+    logger.info("generation end with %i episoded ended with %i success and %i failed", episode_cc, episode_done,  episode_cc - episode_done)
 
     env.close()
