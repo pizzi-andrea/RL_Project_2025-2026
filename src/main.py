@@ -137,7 +137,8 @@ def main():
                 alpha_obs           =   config["rssm_config"]["a_obs"],
                 alpha_att           =   config["rssm_config"]["a_att"],
                 alpha_reward        =   config["rssm_config"]["a_rew"],
-                alpha_continue      =   config["rssm_config"]["a_cont"],            
+                alpha_continue      =   config["rssm_config"]["a_cont"],
+                weights_only=False           
         )
     else:
         # 3. Lo stesso vale per l'inizializzazione standard (from scratch)
@@ -186,7 +187,7 @@ def main():
                     retnorm_limit       =   config["policy_config"]["retnorm_limit"],
                     min_buckets         =   config["policy_config"]["min_buckets"],
                     max_buckets         =   config["policy_config"]["max_buckets"],
-                    #preprocess_callback =   base_callback,
+                    weights_only=False
         
         )
     else:

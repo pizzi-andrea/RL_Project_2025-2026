@@ -101,15 +101,15 @@ class Dreamer(L.LightningModule):
 
         self.att_encoder = nn.Sequential(
             nn.Linear(att_dim, internal_hidden_dim*2),
-            nn.RMSNorm(internal_hidden_dim*2),
+            nn.RMSNorm(internal_hidden_dim*2, eps=0.001),
             nn.SiLU(),
 
             nn.Linear(internal_hidden_dim*2, internal_hidden_dim),
-            nn.RMSNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim, eps=0.001),
             nn.SiLU(),
 
             nn.Linear(internal_hidden_dim, internal_hidden_dim),
-            nn.RMSNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim, eps=0.001),
             nn.SiLU(),
 
             
@@ -118,15 +118,15 @@ class Dreamer(L.LightningModule):
         self.action_encoder = nn.Sequential(
 
             nn.Linear(action_dim, internal_hidden_dim*2),
-            nn.RMSNorm(internal_hidden_dim*2),
+            nn.RMSNorm(internal_hidden_dim*2, eps=0.001),
             nn.SiLU(),
 
             nn.Linear(internal_hidden_dim*2, internal_hidden_dim),
-            nn.RMSNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim, eps=0.001),
             nn.SiLU(),
 
             nn.Linear(internal_hidden_dim, internal_hidden_dim),
-            nn.RMSNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim, eps=0.001),
             nn.SiLU(),
         )
 
@@ -143,7 +143,7 @@ class Dreamer(L.LightningModule):
         # reward network ############################################
         self.reward_head = nn.Sequential(
             nn.Linear(self.state_dim, internal_hidden_dim),
-            nn.RMSNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim, eps=0.001),
             nn.SiLU(),
             
             nn.Linear(internal_hidden_dim, buckets),
@@ -156,7 +156,7 @@ class Dreamer(L.LightningModule):
         # continue predictor
         self.cont_head = nn.Sequential(
             nn.Linear(self.state_dim, internal_hidden_dim),
-            nn.RMSNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim, eps=0.001),
             nn.SiLU(),
 
             nn.Linear(internal_hidden_dim, 1),
@@ -165,7 +165,7 @@ class Dreamer(L.LightningModule):
         # attribute predictor
         self.att_head = nn.Sequential(
             nn.Linear(self.state_dim, internal_hidden_dim),
-            nn.RMSNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim, eps=0.001),
             nn.SiLU(),
             
             nn.Linear(internal_hidden_dim, att_dim)
@@ -174,15 +174,15 @@ class Dreamer(L.LightningModule):
         self.state_encoder = nn.Sequential(
            
             nn.Linear(self.rssm.h_dim + self.rssm.L * self.rssm.K, internal_hidden_dim*2),
-            nn.RMSNorm(internal_hidden_dim*2),
+            nn.RMSNorm(internal_hidden_dim*2, eps=0.001),
             nn.SiLU(),
 
             nn.Linear(internal_hidden_dim*2, internal_hidden_dim),
-            nn.RMSNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim, eps=0.001),
             nn.SiLU(),
 
             nn.Linear(internal_hidden_dim, internal_hidden_dim),
-            nn.RMSNorm(internal_hidden_dim),
+            nn.RMSNorm(internal_hidden_dim, eps=0.001),
             nn.SiLU(),
         )
 
@@ -280,7 +280,7 @@ class Dreamer(L.LightningModule):
             p.requires_grad = True
     
     def configure_optimizers(self):
-        return LaProp(self.parameters(), self.hparams.lr, eps=1e-8)
+        return LaProp(self.parameters(), self.hparams.lr, eps=1e-20)
     
 
     # == OBSERVATIONS ====================================================================

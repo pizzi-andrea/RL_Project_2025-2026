@@ -100,16 +100,16 @@ class RSSM(nn.Module): # need specific train loop
         
         # predict encoded rappresentation z_hat given GRUcell hidden state and input rappresentation
         self.prior_net = nn.Sequential(
-            nn.Linear(h_dim, hidden_dim*2), 
-            nn.RMSNorm(hidden_dim*2),          
+            nn.Linear(h_dim, hidden_dim), 
+            nn.RMSNorm(hidden_dim, eps=0.001),          
             nn.SiLU(),
 
-            nn.Linear(hidden_dim*2, hidden_dim), 
-            nn.RMSNorm(hidden_dim),          
+            nn.Linear(hidden_dim, hidden_dim), 
+            nn.RMSNorm(hidden_dim, eps=0.001),          
             nn.SiLU(),
 
              nn.Linear(hidden_dim, hidden_dim), 
-            nn.RMSNorm(hidden_dim),          
+            nn.RMSNorm(hidden_dim, eps=0.001),          
             nn.SiLU(),
 
             nn.Linear(hidden_dim, self.K * self.L) 
@@ -117,17 +117,17 @@ class RSSM(nn.Module): # need specific train loop
 
         # predict encoded rappresentation z_hat given only GRUcell hidden state 
         self.post_net = nn.Sequential(
-            nn.Linear(h_dim + obs_dim, hidden_dim*2),
-            nn.RMSNorm(hidden_dim*2),
+            nn.Linear(h_dim + obs_dim, hidden_dim),
+            nn.RMSNorm(hidden_dim, eps=0.001),
             nn.SiLU(),
 
-            nn.Linear(hidden_dim*2, hidden_dim), 
-            nn.RMSNorm(hidden_dim),          
+            nn.Linear(hidden_dim, hidden_dim), 
+            nn.RMSNorm(hidden_dim, eps=0.001),          
             nn.SiLU(),
 
 
             nn.Linear(hidden_dim, hidden_dim),
-            nn.RMSNorm(hidden_dim),
+            nn.RMSNorm(hidden_dim, eps=0.001),
             nn.SiLU(),
 
             nn.Linear(hidden_dim, self.K * self.L)

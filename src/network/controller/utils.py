@@ -9,6 +9,7 @@ from collections import deque
 
 class EMAScalar(nn.Module):
     def __init__(self, decay=0.98, eps=1e-6):
+        """Exponential Mobile Mean used to stabilize Critic learnig"""
         super().__init__()
         self.decay = decay
         self.eps = eps
@@ -24,6 +25,7 @@ class EMAScalar(nn.Module):
                 return 0.0, 1.0
             return self.pct5.detach(), torch.clamp(self.pct95 - self.pct5, min=self.eps).detach()
 
+        # == prevent peaks and noise values
         with torch.no_grad():
             flat = values[mask.bool()] if mask is not None else values.flatten()
             cur_5 = torch.quantile(flat, 0.05)
@@ -40,20 +42,19 @@ class EMAScalar(nn.Module):
         return self.pct5.detach(), invscale.detach()
 
 
+
+
 def symlog(x):
-    return torch.sign(x) * torch.log(torch.abs(x) + 1.0)
-
-
+        """symlog operation presented in DreaamerV3 paper"""
+        return torch.sign(x) * torch.log(torch.abs(x) + 1.0)
+        
 def symexp(x):
+    """Inverse of symlog operator"""
     return torch.sign(x)*(torch.exp(torch.abs(x)) - 1.0)
-
-
 @torch.no_grad()
 def lambda_returns(rewards, expected_values, execution_mask, gamma=0.997, lam=0.95):
     """
-    rewards: [B, T]
-    expected_values: [B, T+1] (contiene il frame finale di bootstrap)
-    execution_mask: [B, T] (Probabilità 'continue' o maschera reale)
+    
     """
     returns = torch.zeros_like(expected_values)
     

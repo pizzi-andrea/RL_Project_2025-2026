@@ -16,6 +16,10 @@ from dd_wrapper import *
 from dd_wrapper import *
 import cv2 as cv
 from utils import  *
+
+
+"""Script use to collect multi-envs dataset from Vizdoom"""
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run rolling procedure')
     parser.add_argument("-d", "--dataset", required=False, default="Vizdoom", type=str)
@@ -52,7 +56,8 @@ if __name__ == "__main__":
         scenario_config_file=str(cfg)
     )
 
-    env = Wrapper_vz_basic(env_raw, 0.05)
+    #env = Wrapper_vz_basic(env_raw, 0.05)
+    env = env_raw
 
     sticky = 4 if args.sticky else 0
     agent  = Random_Policy(env.action_space, sticky)
@@ -113,7 +118,7 @@ if __name__ == "__main__":
         
         logger.info("started episode %i of %i", episode_cc, args.episodes)
         
-        # 2. Ciclo principale dell'episodio (da Step 1 a T)
+        # 2. Collect single episode
         while not done:
 
             # store the current transition (s_t, r_t, a_t, c_t, s_{t+1}, done)
@@ -124,8 +129,8 @@ if __name__ == "__main__":
                 "done":   done, # c_{t-1}
             }
             buffer.append(transition | act | att)
-            # Logica sticky bit
             
+            # == Logica sticky bit
             if act_counter >= sticky:
                 action      = env.action_space.sample()
                 act_old     = action
@@ -152,7 +157,7 @@ if __name__ == "__main__":
 
         # store final timestap (s_t, r_t, a_t, c_t, done)
         transition = {
-                "obs":    s,  # Salviamo il frame di arrivo t+1
+                "obs":    s,  #
                 "ids":    ids,
                 "reward": reward,
                 "done":   done,

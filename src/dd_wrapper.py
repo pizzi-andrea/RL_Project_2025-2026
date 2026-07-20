@@ -2,6 +2,27 @@ import gymnasium as gym
 import numpy as np
 import vizdoom as zd
 
+
+
+#TODO: complete for multi-envs
+class EnviromentAdapter:
+    def __init__(self):
+        pass 
+    
+    @staticmethod
+    def get_env_from_id(self, env_id):
+        
+        match env_id:
+            case "VizdoomBasic-v1":
+                name = "basic"
+            case "VizdoomDeadlyCorridor-v1":
+                name = "deadly_corridor"
+            case _:
+                raise ValueError("cfg not found")
+        
+        relative =  Path("../configs") / f"{name}.cfg"
+        return relative.resolve()
+
 class Wrapper_vz_basic(gym.Wrapper):
     def __init__(self, env, distance_reward_scale=0.05):
         super().__init__(env)
@@ -16,26 +37,26 @@ class Wrapper_vz_basic(gym.Wrapper):
     def step(self, action):
         game = self.env.unwrapped.game
         
-        # 1. Track ammo before action to neutralize the native shoot penalty
+        # == Track ammo before action to neutralize the native shoot penalty
         state_before = game.get_state()
         ammo_before = 0
         if state_before is not None:
             ammo_before = game.get_game_variable(zd.GameVariable.AMMO2)
             
-        # 2. Perform step in the environment
+        # == Perform step in the environment
         obs, reward, terminated, truncated, info = self.env.step(action)
         
-        # 3. Time penalty to prevent the agent from idling (encourages speed)
+        # == Time penalty to prevent the agent from idling (encourages speed)
         reward -= 0.01
         
-        # 4. Compensate the native -5 shooting penalty to stabilize training
+        # == Compensate the native -5 shooting penalty to stabilize training
         state_after = game.get_state()
         if state_after is not None:
             ammo_after = game.get_game_variable(zd.GameVariable.AMMO2)
             if ammo_after < ammo_before:
                 reward += 4.5  # Neutralizes native penalty down to a mild -0.5
         
-        # 5. Calculate dense distance-based reward delta
+        # == Calculate dense distance-based reward delta
         current_distance = self._get_distance_to_target()
         
         if current_distance is not None and self.prev_distance is not None:

@@ -6,11 +6,11 @@ import gymnasium
 from pathlib import Path
 
 # Importa le classi del tuo progetto
-from utils import load_cfg_file, DoomMap, ObservationTransformation, DoomNames
+from utils import load_cfg_file, ObservationTransformation
 from dd_wrapper import Wrapper_vz_basic
 from network.worldModel.dreamer import Dreamer
 from network.controller.Policy import DreamerAgent
-
+from globals import *
 @torch.no_grad()
 def main():
     # 1. Configurazione degli argomenti da linea di comando
@@ -26,14 +26,14 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Utilizzando il device: {device}")
 
-    # 2. Caricamento dei Modelli
+    
     print(f"[INFO] Caricamento del World Model da {args.dreamer_ckpt}...")
     # NOTA: Assicurati che encoder e decoder siano gestiti correttamente nel tuo load_from_checkpoint
-    rssm_model = Dreamer.load_from_checkpoint(args.dreamer_ckpt).to(device)
+    rssm_model = Dreamer.load_from_checkpoint(args.dreamer_ckpt, weights_only=False).to(device)
     rssm_model.eval()
 
     print(f"[INFO] Caricamento della Policy da {args.policy_ckpt}...")
-    agent = DreamerAgent.load_from_checkpoint(args.policy_ckpt, dreamer_model=rssm_model).to(device)
+    agent = DreamerAgent.load_from_checkpoint(args.policy_ckpt, dreamer_model=rssm_model, weights_only=False).to(device)
     agent.eval()
 
     # Creazione cartella di output

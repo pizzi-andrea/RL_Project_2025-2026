@@ -4,6 +4,12 @@ class Critic(nn.Module):
     """Critic Network use to estimate Value functions encoded in buckets spaces and linear spaces"""
     def __init__(self, dim_state, num_buckets, min_buckets=-20, max_buckets=20, hidden_dim=1024):
         """
+        Args:
+            dim_state: dimension rssm state
+            num_buckets: number of bukets
+            min_buckets: minimum values of bukets
+            max_buckets: maximum values of buckets 
+            hidden_dim: dimension of hidden mlp layers
         """
         super().__init__()
         
@@ -23,7 +29,8 @@ class Critic(nn.Module):
    
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            # Assumendo che tu stia importando dreamerv3_normal_initializer altrove
+            
+            # imported by Ray libs
             dreamerv3_normal_initializer(m.weight) 
             if m.bias is not None:
                 nn.init.zeros_(m.bias)
@@ -39,13 +46,13 @@ class Critic(nn.Module):
 
         return nn.Sequential(
             nn.Linear(dim_state, hidden_dim * 2, bias=False),
-            nn.LayerNorm(hidden_dim * 2, eps=eps),
+            nn.RMSNorm(hidden_dim * 2, eps=eps),
             nn.SiLU(),
             nn.Linear(hidden_dim * 2, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim, eps=eps),
+            nn.RMSNorm(hidden_dim, eps=eps),
             nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim, eps=eps),
+            nn.RMSNorm(hidden_dim, eps=eps),
             nn.SiLU(),
         )
 
@@ -61,14 +68,14 @@ class Critic(nn.Module):
         """
         Predict Value from given state x (linear)
         """
-        # 1.logits + probs
+        # logits + probs
         pred_values_log = self.decode_value(x)
         pred_values_prob = self.softmax(pred_values_log)
         
-        # 2. expected value in symlog space
+        #  expected value in symlog space
         v_symlog = (pred_values_prob * self.buckets).sum(dim=-1)
         
-        # 3. linear value 
+        # linear value 
         v_linear = symexp(v_symlog)
         return v_linear
 

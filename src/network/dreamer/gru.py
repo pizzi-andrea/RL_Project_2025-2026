@@ -1,5 +1,11 @@
 import torch
 from torch import nn
+
+##########################################
+# taken from the ray framework libraries #
+# https://arxiv.org/pdf/1712.05889       #
+##########################################
+
 class DreamerV3GRUCell(nn.Module):
     # == Analogous to Danijar's JAX GRU unit code
     def __init__(self, input_size, hidden_size):
@@ -16,7 +22,7 @@ class DreamerV3GRUCell(nn.Module):
         # == Using standard initializer as per DreamerV3 specs
         nn.init.xavier_uniform_(self.linear.weight)
 
-        self.layer_norm = nn.LayerNorm(self.output_size, eps=0.001)
+        self.layer_norm = nn.RMSNorm(self.output_size, eps=0.001)
 
     def forward(self, x, h_prev):
         # == Concatenate input with previous state

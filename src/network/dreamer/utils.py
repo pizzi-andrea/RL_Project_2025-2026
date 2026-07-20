@@ -35,30 +35,29 @@ def force_list(
 
 def logits2discrate(logits: torch.Tensor, unimix: float = 0.01) -> torch.Tensor:
     """
-    Converte i logit in una rappresentazione categorica one-hot differenziabile,
-    replicando la logica del RepresentationLayer di Ray RLlib.
+    Convert distribution logits in discrate rappresentation using one hot categorical encoding how present in DreamerV3
+    
+    Args:
+        logits: distribution logits
+        unimix: normal dist. to inject to prevent dist. collapse
     """
-    # 1. Calcola le probabilità tramite softmax
+    
     probs = torch.softmax(logits, dim=-1)
 
-    # 2. Applica l'unimix per prevenire il collasso delle probabilità
     if unimix > 0.0:
         num_classes = logits.shape[-1]
         probs = (1.0 - unimix) * probs + unimix * (1.0 / num_classes)
 
-    # 3. Ray ricrea i logit stabili partendo dalle probabilità mixate
     mixed_logits = torch.log(probs)
 
-    # 4. Crea la distribuzione categorica one-hot indipendente
+
     distribution = torch.distributions.Independent(
         torch.distributions.OneHotCategorical(logits=mixed_logits),
         reinterpreted_batch_ndims=1,
     )
 
-    # 5. Estrai il campione (one-hot)
     sample = distribution.sample()
 
-    # 6. Applica lo straight-through gradient estimator
     z_st = sample.detach() + probs - probs.detach()
 
     return z_st

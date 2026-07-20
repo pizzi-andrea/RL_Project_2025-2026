@@ -27,7 +27,7 @@ def critic_loss(v_hat_log, target_twohot, c_soft):
     return final_loss.mean()
 
 
-def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, c_soft, entropy_scale=3e-4, mask=None):
+def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, mask, entropy_scale=3e-4, ):
     """"Normalize actor loss suitable for multi-enviroment rewards"""
 
     # == normalize td_return to avoid gradient explosion 
@@ -43,15 +43,15 @@ def actor_loss(td_return, critic_values, action_log_prob, entropy, ema_scaler, c
     # == compute loss value
     per_step_objective = (advantage * action_log_prob) + (entropy_scale * entropy)
 
-    weighted_objective = per_step_objective * c_soft
+    weighted_objective = per_step_objective * mask
     
-    lengths = c_soft.sum(dim=1).clamp(min=1.0)
+    lengths = mask.sum(dim=1).clamp(min=1.0)
     final_loss = -( (weighted_objective.sum(dim=1) / lengths).mean() )
     
     # == update EMA scaler
     with torch.no_grad():
-        adv_metric = ((advantage * action_log_prob * c_soft).sum(dim=1) / lengths).mean().item()
-        ent_metric = ((entropy_scale * entropy * c_soft).sum(dim=1) / lengths).mean().item()
+        adv_metric = ((advantage * action_log_prob * mask).sum(dim=1) / lengths).mean().item()
+        ent_metric = ((entropy_scale * entropy * mask).sum(dim=1) / lengths).mean().item()
         ema_val = invscale.mean().item()
 
     return final_loss, ema_val, adv_metric, ent_metric

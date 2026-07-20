@@ -75,7 +75,6 @@ def reward_loss(r_hat, r):
 
 def loss_representation(q_log, p_log, mask=None, unimix:float=0.01):
     """
-    (posterior)
     """
     p_log = p_log.detach()
 

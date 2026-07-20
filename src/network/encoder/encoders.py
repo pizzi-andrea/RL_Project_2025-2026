@@ -68,7 +68,7 @@ class ImpalaCNN(L.LightningModule):
             
             nn.Flatten(),
             nn.Linear(flatten_dim, latent_dim),
-            nn.LayerNorm(latent_dim)
+            nn.RMSNorm(latent_dim, eps=0.001)
         )
 
     def encode(self, x):
@@ -111,7 +111,7 @@ class ResNet(L.LightningModule):
             
             nn.Flatten(),
             nn.Linear(flatten_dim, latent_dim),
-            nn.LayerNorm(latent_dim)
+            nn.RMSNorm(latent_dim, eps=0.001)
         )
 
     def encode(self, x):
@@ -158,7 +158,7 @@ class Encoder(L.LightningModule):
             
             nn.Flatten(),
             nn.Linear(flatten_dim, latent_dim),
-            nn.LayerNorm(latent_dim)
+            nn.RMSNorm(latent_dim, eps=0.001)
         )
 
     def encode(self, x):

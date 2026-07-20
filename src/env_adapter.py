@@ -13,12 +13,12 @@ from vizdoom import gymnasium_wrapper
 from utils import *
 
 class EnviromentAdapter:
-    """Specialized class for Dreamer Agent interaction with VizDoom environment"""
+    """Wrapper class useful to collect new episods for PER buffers (not use this class to evaluate the model)"""
     def __init__(self, agent:DreamerAgent, memory_manager:DynamicDataAllocator, device:str="cpu"):
         self.agent = agent
         self.device = device
         self.memory_m = memory_manager
-        # Utilizza il logger configurato in stile ROS 2
+    
         self.logger = configure_logger("Environment")
         self.memory = agent.dreamer_model.rssm.init_state(1, self.device)
 
@@ -27,7 +27,7 @@ class EnviromentAdapter:
         
     @no_grad()
     def act(self, obs: np.ndarray, user_att: list[float], prev_action: np.ndarray, mask_actions=None, local_act_order: list[str] = [], preprocess=None):
-        # 1. Preprocessing e Batching (deve essere [1, C, H, W])
+
         if preprocess is not None:
             obs_t = preprocess(obs).to(self.device)
         else:
@@ -36,16 +36,15 @@ class EnviromentAdapter:
                 obs_t = obs_t.permute(2, 0, 1)
             obs_t = obs_t.unsqueeze(0)  # [1, C, H, W]
         
-        # 2. Preparazione Attributi e Maschera [1, Dim]
+        
         user_att_t = torch.tensor(user_att, dtype=torch.float32).unsqueeze(0).to(self.device)
         mask_actions_t = torch.from_numpy(mask_actions).unsqueeze(0).to(self.device) if mask_actions is not None else None
         
-        # Forza la forma [1, action_dim] in modo robusto.
         prev_action_t = torch.as_tensor(prev_action, device=self.device, dtype=torch.float32).view(1, -1)
      
         one_hot_action, self.memory = self.agent.act(obs_t, user_att_t, prev_action_t, self.memory, mask_actions_t)
         
-        # Estrae l'azione di output garantendo la compatibilità NumPy
+
         one_hot_action_np = one_hot_action.cpu().numpy() if isinstance(one_hot_action, torch.Tensor) else one_hot_action
         global_action_idx = np.argmax(one_hot_action_np, axis=-1).item()
         
@@ -93,7 +92,8 @@ class EnviromentAdapter:
             scenario_config_file=str(cfg_path)
         )
 
-        env = Wrapper_vz_basic(env_raw, 0.05)
+        #env = Wrapper_vz_basic(env_raw, 0.05)
+        env = env_raw
         mapper = DoomMap(env)
         
         episode_rewards = []
@@ -126,9 +126,10 @@ class EnviromentAdapter:
 
             # ==========================
             
-            # == main loop to collect a single episode (o_t, a_{t-1}, r_t})
+            # == main loop to collect a single episode (o_t, a_{t-1}, r_t}) ======================================
             while not done:
-                #  transition
+                
+                # == transition =======================================
                 
                 transition = {
                     "obs":    s,            # o_{t}
@@ -138,12 +139,13 @@ class EnviromentAdapter:
                 } | act | att               # a_{t-1} s_{t}
                 episode.append(transition)
                 
+                # == using wrap action act to perform action with Actor model
                 local_action, local_action_hot = self.act(
                     s, list(att.values()), prev_action=local_action_hot, 
                     mask_actions=mapper.act_mask, local_act_order=mapper._gym_action_names, preprocess=preprocess
                 )
                 
-               
+
                 act = mapper.action_local2global(local_action)
                 
                 
@@ -165,7 +167,7 @@ class EnviromentAdapter:
                     "obs":    s,    # s_{T -1}
                     "ids":    ids,  # a_{T-1}
                     "reward": r,    # r_{T-1}      
-                    "done":   False,# c_{T-1}
+                    "done":   done,# c_{T-1}
                 } | act | att
             episode.append(transition)
     
@@ -191,11 +193,11 @@ class EnviromentAdapter:
             self.logger.info(f"Aggregate Metric - {key}: {value:.4f}")
         
         if self.agent.logger is not None:
-            # Usiamo il global_step dell'agente per allineare questo grafico agli altri
+         
             current_step = self.agent.global_step
-            self.agent.logger.experiment.add_scalar("Real_Env/episode_return", metrics["mean_reward"], current_step)
-            self.agent.logger.experiment.add_scalar("Real_Env/episode_length", metrics["mean_episode_length"], current_step)
-            self.agent.logger.experiment.add_scalar("Real_Env/max_reward", metrics["max_reward"], current_step)
+            self.agent.logger.experiment.add_scalar("episode_return", metrics["mean_reward"], current_step)
+            self.agent.logger.experiment.add_scalar("episode_length", metrics["mean_episode_length"], current_step)
+            self.agent.logger.experiment.add_scalar("max_reward", metrics["max_reward"], current_step)
         
         self.logger.info(f"Terminated Episodes: {terminated_episodes}/{n_episodes}")
         self.logger.info(f"Truncated Episodes: {truncated_episodes}/{n_episodes}")

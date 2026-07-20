@@ -83,18 +83,15 @@ class EpisodicDoomDataset(Dataset):
             nrows=n_rows
         )
        
+        # == collect metadata =======================================
         actions = metadata[self.action_name].to_numpy(dtype=np.uint8)
         att_player = metadata[self.att_name].to_numpy(dtype=np.uint8)
-        is_first_val = (metadata["ids"].iloc[0] == 0)
-        
-        
+        is_first_val = (metadata["ids"].iloc[0] == 0)    
         obs_path = metadata["path_obs"]
-        
         rewards = metadata["reward"].to_numpy(dtype=np.float16)
         dones = metadata["done"].to_numpy(dtype=bool)
 
         obs = np.empty( (len(metadata), self.h, self.w, 3), dtype=np.uint8)
-     
         priority = self.per_indexs[index]
         with np.load(episode_path_m.parent.joinpath("mask_actions.npz")) as data:
             valid_actions_mask = data["valid_actions_mask"]
@@ -106,7 +103,7 @@ class EpisodicDoomDataset(Dataset):
             if not p.is_absolute():
                 p = obs_dir / p.name 
             if not p.exists():
-                # fallback: ripeti ultimo frame valido (episodio corto / frame mancante)
+           
                 if last_ok is None:
                     raise FileNotFoundError(f"Missing first frame: {p}")
                 p = last_ok
@@ -129,7 +126,6 @@ class EpisodicDoomDataset(Dataset):
         }
 
         if self.preprocessor is not None:
-            #print(sampled_episode["obs"].shape)
             sampled_episode["obs"] = self.preprocessor(sampled_episode["obs"])
 
         if self.per_weights is not None:
@@ -140,7 +136,7 @@ class EpisodicDoomDataset(Dataset):
         return sampled_episode
         
 def collate_fn(batch):
- 
+    # custom collate function that build episodes batchs
     batch_obs = [b["obs"] for b in batch]
     batch_action = [torch.tensor(b["action"]) for b in batch]
     batch_reward = [torch.tensor(b["reward"]) for b in batch]
@@ -160,10 +156,7 @@ def collate_fn(batch):
 
     temporal_mask = pad_sequence([torch.ones(len(b), dtype=torch.float32) for b in batch_obs], batch_first=True)
     valid_actions_mask = batch_mask.unsqueeze(1).expand(-1, obs.shape[1], -1).clone()
-    #print(action.shape)
-    #print(reward.shape)
-    #print(done.shape)
-    #exit()
+  
     return {
         "obs": obs,
         "action": action,
@@ -179,5 +172,9 @@ def collate_fn(batch):
     }
 
 def collect_episodes_from_buffer(buffer:PriorityExperienceReplay, max_dim:int=5000):
+    """exstract n episodes from buffer reply (PER)
+    Args:
+    max_dim: maxiumum number of elements to exstract from buffer
+    """
     buff_path, pririty_idx, buffer_idx, weights  = buffer.get(max_dim)
     return buff_path, pririty_idx, buffer_idx, weights 

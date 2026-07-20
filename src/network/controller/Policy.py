@@ -43,7 +43,7 @@ class DreamerAgent(L.LightningModule):
         self.save_hyperparameters(ignore=['dreamer_model', 'preprocess_callback'])
         
         if isinstance(dreamer_model, str):
-            self.dreamer_model = Dreamer.load_from_checkpoint(dreamer_model)
+            self.dreamer_model = Dreamer.load_from_checkpoint(dreamer_model, weights_only=False)
         else:
             self.dreamer_model = dreamer_model
         
@@ -65,6 +65,7 @@ class DreamerAgent(L.LightningModule):
         self.actor = Actor(dim_state=self.emb_dim, num_dist=action_space_dim, unimix=unimix, hidden_dim=hidden_dim)
         self.critic = Critic(dim_state=self.emb_dim, num_buckets=buckets, min_buckets=min_buckets, max_buckets=max_buckets, hidden_dim=hidden_dim)
         self.target = copy.deepcopy(self.critic)
+        self.target.requires_grad_(False)
     
     def update_target(self):
         with torch.no_grad():
@@ -73,8 +74,8 @@ class DreamerAgent(L.LightningModule):
                 p_target.data.mul_(decay).add_((1.0 - decay) * p.data)
 
     def configure_optimizers(self):
-        opt_actor = LaProp(self.actor.parameters(), lr=self.hparams.lr_actor, eps=1e-8)
-        opt_critic = LaProp(self.critic.parameters(), lr=self.hparams.lr_critic, eps=1e-8)
+        opt_actor = LaProp(self.actor.parameters(), lr=self.hparams.lr_actor, eps=1e-20)
+        opt_critic = LaProp(self.critic.parameters(), lr=self.hparams.lr_critic, eps=1e-20)
         return [opt_actor, opt_critic]
     
     def on_train_start(self):
@@ -109,9 +110,9 @@ class DreamerAgent(L.LightningModule):
 
     
         with torch.no_grad():
-            # obtain value in linear space for lambda return 
-            v_hat_target_linear = self.critic.predict_value(states_hat)
-            v_hat_target_real_linear = self.critic.predict_value(states_real)
+            # ===  ===
+            v_hat_target_linear = self.target.predict_value(states_hat)
+            v_hat_target_real_linear = self.target.predict_value(states_real)
 
             lambda_return = lambda_returns(
                 rewards=r_hat,
@@ -129,16 +130,17 @@ class DreamerAgent(L.LightningModule):
                 gamma=self.gamma
             )
 
-            
-            # transform values in symlog space for loss 
-            two_hot_lambda_return = twohot(symlog(lambda_return), self.critic.buckets)
-            two_hot_lambda_return_real = twohot(symlog(lambda_return_real), self.critic.buckets)
+            # === transform targes in symlog space ===
+            two_hot_lambda_return = twohot(symlog(lambda_return.detach()), self.critic.buckets)
+            two_hot_lambda_return_real = twohot(symlog(lambda_return_real.detach()), self.critic.buckets)
 
-        # === 2. Actor Loss (Baseline nello Spazio Lineare) ===
-        
-
+        # == critic value in symexp (linear) space
         v_hat_critic_linear = self.critic.predict_value(states_hat[:, :-1]).detach()
         
+        real_mask_flat = mask.reshape(-1, 1)
+        imagination_mask = c_hat * real_mask_flat
+
+        # == compute actor loss 
         actor_loss_v, ema_scale, advantage, _ = actor_loss(
             td_return=lambda_return, 
             critic_values=v_hat_critic_linear, 
@@ -146,23 +148,20 @@ class DreamerAgent(L.LightningModule):
             entropy=entropy,
             ema_scaler=self.ema,
             entropy_scale=self.entropy_coef,
-            c_soft=c_hat, 
-            mask=c_hat    
+            mask=imagination_mask    
         )
 
-        v_hat_log_critic = self.critic.decode_value(states_hat[:, :-1])
-        v_hat_log_critic_real = self.critic.decode_value(states_real[:, :-1])
-
+        v_hat_log_critic = self.critic.decode_value(states_hat[:, :-1].detach())
+        v_hat_log_critic_real = self.critic.decode_value(states_real[:, :-1].detach())
       
-        critic_l = critic_loss(v_hat_log_critic, two_hot_lambda_return, c_hat)
-        critic_r = critic_loss(v_hat_log_critic_real, two_hot_lambda_return_real, continue_real)
+        critic_l = critic_loss(v_hat_log_critic, two_hot_lambda_return, imagination_mask)
         
-        # complex regulation need to stabilize mobile target learning 
-        weight_reg = 0.0
-        for p, p_target in zip(self.critic.parameters(), self.target.parameters()):
-            weight_reg += torch.sum((p - p_target.detach()) ** 2)
+        real_critic_mask = mask * continue_real 
+        critic_r = critic_loss(v_hat_log_critic_real, two_hot_lambda_return_real, real_critic_mask)
         
-        critic_loss_v = critic_l + 0.3 * critic_r + 0.01 * weight_reg
+        # complex regulation need to stabilize mobile target learning with slow network
+       
+        critic_loss_v = critic_l + 0.3 * critic_r
         loss = critic_loss_v + actor_loss_v
 
         # == OPTIMIZATION ============================================================
@@ -178,30 +177,20 @@ class DreamerAgent(L.LightningModule):
         opt_actor.step()
         opt_critic.step()
         # ===============================================================================
-        
+              
         # == Metrics ====================================================================
         lengths = c_hat.sum(dim=1).clamp(min=1)
         lengths_r = continue_real.sum(dim=1).clamp(min=1)
-
         with torch.no_grad():
-            symlog_lambda_real = (symlog(lambda_return_real) * continue_real).sum(dim=1) / lengths_r
-            log_lambda = (lambda_return * c_hat).sum(dim=1) / lengths
             log_reward = (r_hat * c_hat).sum(dim=1) / lengths
-            real_reward = (r_real * continue_real).sum(dim=1)
-            real_lambda = (lambda_return_real * continue_real).sum(dim=1) / lengths_r
             entropy_m = ((entropy * c_hat).sum(dim=1) / lengths).mean()
+            real_lambda = (lambda_return_real * continue_real).sum(dim=1) / lengths_r
 
         self.log_dict({
-            "entropy"       : entropy_m.item(),
-            "lambda_real_symlog": symlog_lambda_real.mean().item(),
-            "lambda_return" : log_lambda.mean().item(),
-            "train_loss"    : loss.item(),
-            "actor_loss"    : actor_loss_v.item(),
-            "critic_loss"   : critic_loss_v.item(),
-            "mean_reward"   : log_reward.mean().item(),
-            "real_reward"   : real_reward.mean().item(),
-            "ema_scale"     : ema_scale,
-            "advantage"     : advantage
+            "entropy"         : entropy_m.item(),
+            "critic_loss"     : critic_loss_v.item(),
+            "imagined_reward" : log_reward.mean().item(),
+            "lambda_return"   : real_lambda.mean().item() 
         }, prog_bar=True, on_step=True, on_epoch=False)
 
         return {
@@ -217,37 +206,30 @@ class DreamerAgent(L.LightningModule):
         self.ema.eval()
         self.update_target()
         
-        
-        len_hat = int(outputs["len_hat"].item()) if torch.is_tensor(outputs["len_hat"]) else int(outputs["len_hat"])
-        len_r = int(outputs["len_r"].item()) if torch.is_tensor(outputs["len_r"]) else int(outputs["len_r"])
-        
+        len_hat = int(outputs["len_hat"][0].item()) if torch.is_tensor(outputs["len_hat"]) else int(outputs["len_hat"])
+        len_r = int(outputs["len_r"][0].item()) if torch.is_tensor(outputs["len_r"]) else int(outputs["len_r"])
         
         latent_space_sample = outputs["imagination"][0].unsqueeze(0) 
-        imagined_frames = self.dreamer_model.predict_obs(latent_space_sample[:, :len_hat - 1, :, :])
-        imagined_frames = imagined_frames.squeeze(0)  # Output atteso: [Time, Canali, Altezza, Larghezza]
-
+        imagined_frames = self.dreamer_model.predict_obs(latent_space_sample[:, :len_hat - 1, :])
+        imagined_frames = imagined_frames.squeeze(0)  
         
         real = outputs["burn"][0] 
-        real = real[:len_r - 1, :, :, :] # (4D: T, C, H, W)
-
+        real = real[:len_r - 1, :, :, :] 
        
-        if self.global_step % 100 == 0:
+        if self.global_step % 1000 == 0:
             log_dir = self.logger.log_dir if (self.logger and hasattr(self.logger, 'log_dir')) else "."
             make_video(imagined_frames, f"{log_dir}/imagined_{self.global_step}.avi", fps=10)
             print(f"new video save in {log_dir}")
-
 
         if batch_idx == 0 and self.logger is not None:
             burning_steps = min(self.burn_in, real.shape[0])
             burning = real[:burning_steps]
             
-       
             if burning.dtype == torch.uint8:
                 burning = burning.float() / 255.0
             if imagined_frames.dtype == torch.uint8:
                 imagined_frames = imagined_frames.float() / 255.0
                 
-          
             black_separator = torch.zeros_like(burning[0]).unsqueeze(0)
           
             comparison = torch.cat([burning, black_separator, imagined_frames], dim=0)
@@ -275,32 +257,32 @@ class DreamerAgent(L.LightningModule):
     def forward(self, obs, action, user_att, is_first, burn_in:int, mask=None, valid_actions_mask=None, rssm_state=None):
             B, T, _, _, _ = obs.shape
             device = obs.device
-
+            # == encode all observations ==========================
             x = self.dreamer_model.encode_obs(obs)
+            x = x.detach() # not compute gradients for burning. 
+            # == encode all status ================================
             user_att_enc = self.dreamer_model.encode_att(user_att)
-            x = x.detach()
             user_att_enc = user_att_enc.detach()
 
-            # Inizializzazione pulita
+            # == init rssm state ===================================
             if rssm_state is None:
                 rssm_state = self.rssm.init_state(B, device)
 
             last_action = action[:, 0].clone() 
 
-            # === 1. RESET INIZIALE CORRETTO ===
-            # Resettiamo la memoria SOLO all'istante t=0 per i nuovi episodi. 
-            # In questo modo il burn-in costruirà un ricordo solido e non verrà cancellato.
+            # === setup initial status =============================
+            
             rssm_state, last_action = self._apply_episode_reset(
                 rssm_state, last_action, action[:, 0], is_first
             )
 
+            # == prepare buffers
             real_states = torch.empty(B, T, self.emb_dim, device=device)
-            
-            # Buffer per salvare l'intero storico degli stati interni dell'RSSM
+        
             h_history = torch.empty(B, T, self.rssm.h_dim, device=device)
-            z_history = torch.empty(B, T, self.rssm.L, self.rssm.K, device=device)
+            z_history = torch.empty(B, T, self.rssm.L, self.rssm.K, device=device) # flatten dimension
 
-            # === 2. OSSERVAZIONE DELLA REALTÀ (TUTTA LA SEQUENZA) ===
+            # === burning phase =============================================================
             with torch.no_grad():
                 for t in range(T):
                     m_t = mask[:, t].unsqueeze(-1)
@@ -320,24 +302,25 @@ class DreamerAgent(L.LightningModule):
                     z_flat = rssm_state.z.flatten(1)
                     real_states[:, t] = self.dreamer_model.encode_state(rssm_state.h, z_flat)
                     
-                    # Salviamo lo stato esatto a questo istante temporale
                     h_history[:, t] = rssm_state.h.clone()
                     z_history[:, t] = rssm_state.z.clone()
 
-            # Replica l'ultimo stato per allineare le dimensioni con il critic loss come nel tuo codice originale
+            # ==================================================================================
+
+            # == recovery last states =========================================
             real_states = torch.cat([real_states, real_states[:, -1:]], dim=1)
 
-            # === 3. FLATTENING (LA MAGIA DI DREAMER) ===
-            # Fonde Batch e Tempo: B * T diventerà il nostro nuovo mega-batch per l'immaginazione
+            # === flatten all observations to improve computational efficency
             BT = B * T
+            s_flat = real_states[:, :-1].reshape(BT, self.emb_dim) 
             
-            s_flat = real_states[:, :-1].reshape(BT, self.emb_dim) # Escludiamo l'ultimo fittizio
-            
+            # == define new rssm states =========================
             rssm_state_flat = RSSMState(
                 h=h_history.reshape(BT, self.rssm.h_dim),
                 z=z_history.reshape(BT, self.rssm.L, self.rssm.K)
             )
 
+            # == apply action mask (fix for all frame) to compute correct entropy ======
             if valid_actions_mask is not None:
                 if valid_actions_mask.dim() == 3: # Se ha forma [B, T, action_dim]
                     current_action_mask = valid_actions_mask.reshape(BT, -1)
@@ -346,20 +329,26 @@ class DreamerAgent(L.LightningModule):
             else:
                 current_action_mask = None
 
-            # Tensori per i risultati dell'immaginazione (Forma: [B*T, Horizon, ...])
+            
+
+            # == buffers for img. data ===================================================
             reward        = torch.empty(BT, self.horizon, device=device)
             continues     = torch.empty(BT, self.horizon, device=device)
             entropys      = torch.empty(BT, self.horizon, device=device)
             log_probs     = torch.empty(BT, self.horizon, device=device)
             latent_states = torch.empty(BT, self.horizon, self.emb_dim, device=device)
-
-            # === 4. IMMAGINAZIONE TOTALE PARALLELA ===
+            # == =========================================================================
+            
+            # === start img. =============================================================
             s = s_flat
             rssm_state = rssm_state_flat
 
             for t in range(self.horizon):
+
+                # == act
                 act_t1, log_p, entropy = self.actor(s, current_action_mask)
 
+                # == save enviroment informations a states
                 latent_states[:, t] = s
 
                 r_t_real = self.dreamer_model.predict_reward(s)
@@ -370,7 +359,9 @@ class DreamerAgent(L.LightningModule):
                 continues[:, t] = c_t
                 log_probs[:, t] = log_p
                 entropys[:, t]  = entropy
-
+                # == ======================================================
+                
+                # == prepare data for next img. step based on previs data
                 act_t1_enc = self.dreamer_model.encode_action(act_t1)
                 att_t1_enc = self.dreamer_model.encode_att(user_att_t_real)
 
@@ -379,7 +370,7 @@ class DreamerAgent(L.LightningModule):
                 z_flat_imag = rssm_state.z.flatten(1)
                 s = self.dreamer_model.encode_state(rssm_state.h, z_flat_imag)
                 
-                # La maschera valida delle azioni ha senso solo al primo frame, poi l'agente è libero
+                # burning phase set correct mask not need for next steps
                 current_action_mask = None
 
             latent_states = torch.cat([latent_states, s.unsqueeze(1)], dim=1)
@@ -393,8 +384,9 @@ class DreamerAgent(L.LightningModule):
                 "real_states": real_states   # [B, T+1, emb_dim]
             }
 
-    # 🎯 Metodo aggiornato: accetta init_action per copiare il comportamento di Dreamer.py
+    
     def _apply_episode_reset(self, state: RSSMState, last_action: torch.Tensor, init_action: torch.Tensor, is_first: torch.Tensor) -> tuple[RSSMState, torch.Tensor]:
+        """Utility to reset episods that start by t=0"""
         if is_first is None or not is_first.any():
             return state, last_action
 
@@ -406,7 +398,7 @@ class DreamerAgent(L.LightningModule):
 
         state.h        = torch.where(first.bool(),  fresh.h, state.h)
         state.z        = torch.where(first3.bool(), fresh.z, state.z)
-        # 🎯 Usa l'azione al passo t=0 (init_action) al posto degli zeri assoluti
+        
         last_action    = torch.where(first.bool(), init_action, last_action)
 
         return state, last_action

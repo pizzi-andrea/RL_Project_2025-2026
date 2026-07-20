@@ -24,19 +24,19 @@ class Actor(nn.Module):
         # == mlp layers
         self.l1 = nn.Sequential(
             nn.Linear(in_features=dim_state, out_features=hidden_dim*2, bias=False),
-            nn.LayerNorm(hidden_dim*2, eps=0.001),
+            nn.RMSNorm(hidden_dim*2, eps=0.001),
             nn.SiLU(),
         )
 
         self.l2 = nn.Sequential(
             nn.Linear(in_features=hidden_dim*2, out_features=hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim, eps=0.001),
+            nn.RMSNorm(hidden_dim, eps=0.001),
             nn.SiLU(),
         )
 
         self.l3 = nn.Sequential(
             nn.Linear(in_features=hidden_dim, out_features=hidden_dim, bias=False),
-            nn.LayerNorm(hidden_dim, eps=0.001),
+            nn.RMSNorm(hidden_dim, eps=0.001),
             nn.SiLU(),
         )
         # ================================================================================
@@ -49,10 +49,15 @@ class Actor(nn.Module):
     
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-        
-            dreamerv3_normal_initializer(m.weight)
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
+            if hasattr(self, 'dist_pred') and m is self.dist_pred:
+             
+                nn.init.uniform_(m.weight, -1e-4, 1e-4) 
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            else:
+                dreamerv3_normal_initializer(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
     
     
     def forward(self, x, valid_actions_mask=None): 
@@ -88,17 +93,10 @@ class Actor(nn.Module):
             
         mixed_probs = (1.0 - self.unimix) * probs + self.unimix * uniform
         
-        
-        mixed_log_probs = torch.log(mixed_probs + 1e-8)
-        
-        # == eliminate the entropy for invalid actions
-        if valid_actions_mask is not None:
-            mixed_log_probs = mixed_log_probs.masked_fill(~mask, -1e9)
-
-        # == init dist
+        # == init dist =========================================
         dist = OneHotCategorical(probs=mixed_probs)
         
-        # STE
+        # == STE =============================================
         sampled_action = dist.sample()
         action = sampled_action.float().detach() + (mixed_probs - mixed_probs.detach())
 

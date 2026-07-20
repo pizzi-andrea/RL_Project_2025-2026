@@ -53,21 +53,20 @@ class DecoderAdapter(Adapter):
     Unified interface for decoder module
     """
     def __init__(self, decoder_module):
-        # Assumiamo che decoder_module sia un'istanza della classe Decoder definita prima
+
         super().__init__(decoder_module)
         self.res = decoder_module.input_res # (64, 64)
 
     def forward(self, feat: torch.Tensor) -> torch.Tensor:
         if feat.dim() == 3:
             B, T, D = feat.shape
-            # 1. Appiattimento fondamentale per il layer Linear del Decoder
+   
             feat_flat = feat.reshape(B * T, D) 
             
-            # 2. Decodifica (Output: [B*T, 3, 64, 64])
+      
             imgs = self.encoder.decode(feat_flat) 
-            
-            # 3. Ripristino dimensione temporale
+    
             return imgs.view(B, T, 3, self.res[0], self.res[1])
         else:
-            # Caso batch singolo senza tempo [B, D]
+          
             return self.encoder.decode(feat)
