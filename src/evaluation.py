@@ -6,7 +6,7 @@ import gymnasium
 from pathlib import Path
 
 # Importa le classi del tuo progetto
-from utils import load_cfg_file, ObservationTransformation
+from utils import ObservationTransformation
 from dd_wrapper import Wrapper_vz_basic
 from network.worldModel.dreamer import Dreamer
 from network.controller.Policy import DreamerAgent

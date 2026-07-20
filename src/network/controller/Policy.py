@@ -110,9 +110,8 @@ class DreamerAgent(L.LightningModule):
 
     
         with torch.no_grad():
-            # ===  ===
+            
             v_hat_target_linear = self.target.predict_value(states_hat)
-            v_hat_target_real_linear = self.target.predict_value(states_real)
 
             lambda_return = lambda_returns(
                 rewards=r_hat,
@@ -122,6 +121,19 @@ class DreamerAgent(L.LightningModule):
                 gamma=self.gamma
             )
 
+            
+            B, T = continue_real.shape
+            
+            
+            on_policy_value_estimates = lambda_return[:, 0].reshape(B, T)
+            
+           
+            bootstrap_value_final = self.target.predict_value(states_real[:, -1:]) # shape [B, 1]
+            
+           
+            v_hat_target_real_linear = torch.cat([on_policy_value_estimates, bootstrap_value_final], dim=1)
+
+            
             lambda_return_real = lambda_returns(
                 rewards=r_real,
                 expected_values=v_hat_target_real_linear,
@@ -171,9 +183,9 @@ class DreamerAgent(L.LightningModule):
         
         self.manual_backward(loss)
 
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=100.0)
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=100.0)
-        
+        AGC(self.actor.parameters(), clip_factor=0.03)
+        AGC(self.critic.parameters(), clip_factor=0.03)
+
         opt_actor.step()
         opt_critic.step()
         # ===============================================================================
@@ -322,9 +334,9 @@ class DreamerAgent(L.LightningModule):
 
             # == apply action mask (fix for all frame) to compute correct entropy ======
             if valid_actions_mask is not None:
-                if valid_actions_mask.dim() == 3: # Se ha forma [B, T, action_dim]
+                if valid_actions_mask.dim() == 3:
                     current_action_mask = valid_actions_mask.reshape(BT, -1)
-                else: # Se ha forma [B, action_dim]
+                else: 
                     current_action_mask = valid_actions_mask.repeat_interleave(T, dim=0)
             else:
                 current_action_mask = None
@@ -362,7 +374,7 @@ class DreamerAgent(L.LightningModule):
                 # == ======================================================
                 
                 # == prepare data for next img. step based on previs data
-                act_t1_enc = self.dreamer_model.encode_action(act_t1)
+                act_t1_enc = self.dreamer_model.encode_action(act_t1.detach())
                 att_t1_enc = self.dreamer_model.encode_att(user_att_t_real)
 
                 rssm_state, _ = self.rssm.imagine_step(rssm_state, act_t1_enc, att_t1_enc)

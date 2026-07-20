@@ -37,15 +37,7 @@ def create_video_from_frames(input_folder, output_path, fps=30):
 
 def load_cfg_file(env_name:str) -> Path:
 
-    match env_name:
-        case "VizdoomBasic-v1":
-            name = "basic"
-        case "VizdoomDeadlyCorridor-v1":
-            name = "deadly_corridor"
-        case _:
-            raise ValueError("cfg not found")
-        
-    relative =  Path("../configs") / f"{name}.cfg"
+    relative =  Path("../configs") / f"{env_name}.cfg"
     absolute = relative.resolve()
     if not relative.exists():
         print(f"configuration file for {str(absolute)} enviroment not found")

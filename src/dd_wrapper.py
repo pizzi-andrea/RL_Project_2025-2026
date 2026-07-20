@@ -11,7 +11,7 @@ class EnviromentWrapperBuilder:
         pass 
     
     @staticmethod
-    def get_env_from_id(env_id, gmode:str="rgb_array", skip_frame:int=0, **wrapper_args):
+    def get_env_from_id(env_id:str, gmode:str="rgb_array", skip_frame:int=0, **wrapper_args):
         gym_wrapper = None 
         match env_id:
             case "VizdoomBasic-v1":
@@ -21,10 +21,13 @@ class EnviromentWrapperBuilder:
                 name = "deadly_corridor"
                 gym_wrapper = Wrapper_Generic
                 
+            case "VizdoomHealthGathering-v1":
+                name = "health_gathering_supreme"
+                gym_wrapper = Wrapper_Generic
             case _:
-                raise ValueError("cfg not found")
+                raise ValueError(f"cfg `{env_id}` not found")
     
-        cfg = load_cfg_file(env_id)
+        cfg = load_cfg_file(name)
 
 
         env = gym.make(

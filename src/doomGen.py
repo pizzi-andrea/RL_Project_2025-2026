@@ -2,7 +2,7 @@ import argparse
 import numpy as np
 
 import os
-from utils import load_cfg_file
+
 from tqdm.auto import tqdm
 from pathlib import Path
 from random_policy import Random_Policy

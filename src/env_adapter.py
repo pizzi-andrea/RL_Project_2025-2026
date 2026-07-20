@@ -75,7 +75,7 @@ class EnviromentAdapter:
         """
         self.agent.to(self.device)
         render_mode = "human" if graphics else "rgb_array"
-        cfg_path = load_cfg_file(enviroment_id)
+       
 
         env = EnviromentWrapperBuilder.get_env_from_id(enviroment_id, render_mode, frame_skip, **args)
 
