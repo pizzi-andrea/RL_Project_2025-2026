@@ -1,6 +1,6 @@
-python evaluate_dreamer.py \
+python evaluation.py \
     --envs VizdoomBasic-v1 \
-    --dreamer_ckpt path/to/world_model.ckpt \
-    --policy_ckpt path/to/policy_agent.ckpt \
+    --dreamer_ckpt rssm.ckpt \
+    --policy_ckpt policy.ckpt \
     --out_dir ./logs/videos \
     --fps 15

@@ -221,3 +221,7 @@ src/Project
 src/Doom4RSSMg/
 src/Project_*/
 src/dreamerv*/**
+src/**/*.png
+src/**/*.npz
+src/**/*.csv
+*.ckpt
