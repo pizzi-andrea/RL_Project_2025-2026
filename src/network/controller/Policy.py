@@ -381,9 +381,6 @@ class DreamerAgent(L.LightningModule):
                 
                 z_flat_imag = rssm_state.z.flatten(1)
                 s = self.dreamer_model.encode_state(rssm_state.h, z_flat_imag)
-                
-                # burning phase set correct mask not need for next steps
-                current_action_mask = None
 
             latent_states = torch.cat([latent_states, s.unsqueeze(1)], dim=1)
 

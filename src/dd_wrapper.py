@@ -21,9 +21,20 @@ class EnviromentWrapperBuilder:
                 name = "deadly_corridor"
                 gym_wrapper = Wrapper_Generic
                 
-            case "VizdoomHealthGathering-v1":
+            case "VizdoomHealthGatheringSupreme-v1":
                 name = "health_gathering_supreme"
                 gym_wrapper = Wrapper_Generic
+            
+            case "VizdoomHealthGathering-v1":
+                name = "health_gathering"
+                gym_wrapper = Wrapper_Generic
+            case "VizdoomTakeCover-v1":
+                name = "take_cover"
+                gym_wrapper = Wrapper_Generic
+            case "VizdoomMyWayHome-v1":
+                name = "my_way_home"
+                gym_wrapper = Wrapper_Generic
+                
             case _:
                 raise ValueError(f"cfg `{env_id}` not found")
     

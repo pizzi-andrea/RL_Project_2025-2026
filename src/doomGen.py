@@ -128,7 +128,7 @@ if __name__ == "__main__":
             act = mapper.action_local2global(action)
             
             game_next, reward, terminated, truncated, info = env.step(action)
-            s_next         = game_next["screen"]
+            s         = game_next["screen"]
             game_info_next = game_next["gamevariables"]
             done           = terminated or truncated
             att = mapper.stats_local2global(game_info_next)

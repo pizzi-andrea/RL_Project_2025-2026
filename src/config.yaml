@@ -5,8 +5,8 @@ PER_config:
 global_config:
   multi_cpu: 24
   max_episode_length: 2100
-  warmup: 20
-  Project_logs: "VizdoomHealthGathering"
+  warmup: 24
+  Project_logs: "VizdoomDeadlyCorridor" #
   action_shape: 24
   att_shape: 7
   skip_frame: 4
@@ -14,25 +14,25 @@ global_config:
   img_size_h : 64
   img_size_l : 64
   dreamer_iterations: 256
-  dreamer_w: "weights/rssm/rssm.ckpt"
-  policy_w : "weights/policy/policy.ckpt"
+  dreamer_w: "weights/VizdoomDeadlyCorridor/rssm.ckpt"
+  policy_w : "weights/VizdoomDeadlyCorridor/policy.ckpt"
   chunk: 64                     # Specifica corretta del Batch length (T = 64)
   precision: "bf16-mixed" 
   position_gain: 0.01
   compile: false
 
   envs:
-    - "VizdoomHealthGathering-v1"
+    - "VizdoomDeadlyCorridor-v1" # VizdoomHealthGathering-v1 VizdoomDeadlyCorridor-v1
 
   envs_episodes:
-    - 10
+    - 30
 
 encoder_config:
   latent_dim: 512
   model_dim: 512
 
 curiosity_config:
-  alpha: 0.75
+  alpha: 0.70
   beta: 0.4
   eps: 0.000001
   p_max: 30
@@ -40,7 +40,7 @@ curiosity_config:
 
 rssm_config:
   sample_episodes: 128
-  rssm_dataset_path_train: "healt/train"
+  rssm_dataset_path_train: "DC/train"
   train_steps: 300
   train_batch: 16               # Corrisponde a Batch size (B = 16)
   burn_in: 15

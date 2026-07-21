@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
-doom_scenarios=("VizdoomHealthGathering-v1")
-episodes=(10000)
-skip_frame=(1)
+doom_scenarios=("VizdoomHealthGatheringSupreme-v1")
+episodes=(600)
+skip_frame=(4)
 
-sticky=("--sticky")
+sticky=("")
 
-dataset_name="Doom4RSSMs"
+dataset_name="healts"
 
 for idx in "${!episodes[@]}"; do
   
@@ -14,7 +14,7 @@ for idx in "${!episodes[@]}"; do
 
   echo "Generating for: ${doom_scenarios[$idx]} (Skip: ${skip_frame[$idx]}, Sticky: '${CURRENT_STICKY}')"
 
-  python ../src/doomGen.py \
+  python3 ../src/doomGen.py \
     -d "$dataset_name" \
     -n "${episodes[$idx]}" \
     -s train \
@@ -24,5 +24,5 @@ for idx in "${!episodes[@]}"; do
     --resolution_w 64 \
     --crop \
     $CURRENT_STICKY \
-    -t 1200
+    -t 2100
 done

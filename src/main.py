@@ -38,9 +38,10 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 def main():
     cmd = argparse.ArgumentParser()
     cmd.add_argument("--load_weights", action="store_true", required=False, help="load weights from src/weights directory")
+    cmd.add_argument("--config", default="config.yaml", required=False, type=str, help="dremerV3 configuration experiment")
     args = cmd.parse_args()
     log = configure_logger("main")
-    with open("config.yaml", "r") as file:
+    with open(args.config, "r") as file:
         config = safe_load(file)
     validation_log = Path(config["global_config"]["Project_logs"]).joinpath("best_epochs")
     validation_log.mkdir(parents=True, exist_ok=True)

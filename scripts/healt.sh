@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 doom_scenarios=("VizdoomHealthGathering-v1")
-episodes=(600)
+episodes=(120)
 skip_frame=(4)
 
 sticky=("")
