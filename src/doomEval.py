@@ -30,6 +30,7 @@ if __name__ == "__main__":
     parser.add_argument("--resolution_w", required=False, default=64, type=int)
     parser.add_argument("--resolution_h", required=False, default=64, type=int)
     parser.add_argument("--skip_frame", required=False, default=1, type=int)
+    parser.add_argument("--fps", required=False, default=15, type=int, help="fps del video se --save_frames è attivo")
 
     args = parser.parse_args()
 
@@ -108,6 +109,14 @@ if __name__ == "__main__":
     all_steps = []      # una riga per ogni singolo step (per il CSV dettagliato)
     all_episodes = []   # una riga per ogni episodio (per il CSV riassuntivo)
 
+    #
+    out_path = Path(args.out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    video_writer = None
+    video_path = out_path / f"{args.env}_gameplay.mp4"
+
+
     for ep in range(args.episodes):
         # memoria del world model azzerata a inizio episodio: l'agente non deve qualcosa di ep precedente
         rssm_state = agent_model.dreamer_model.rssm.init_state(1, device)
@@ -145,6 +154,15 @@ if __name__ == "__main__":
             done = terminated or truncated
             att_next = mapper.stats_local2global(game_next["gamevariables"])
 
+            if args.save_frames:
+                frame = env.render()  # frame nativo, non il 64x64 che vede la policy
+                frame_bgr = cv.cvtColor(frame, cv.COLOR_RGB2BGR)
+                if video_writer is None:
+                    h, w = frame_bgr.shape[:2]
+                    video_writer = cv.VideoWriter(str(video_path), cv.VideoWriter_fourcc(*"mp4v"), args.fps, (w, h))
+                video_writer.write(frame_bgr)
+
+
             # registro di questo step
             all_steps.append({
                 "episode": ep,
@@ -174,3 +192,32 @@ if __name__ == "__main__":
         })
 
     env.close()
+    # salvataggio risultati
+    if video_writer is not None:
+        video_writer.release()
+        print(f"[INFO] video salvato in: {video_path}")
+    steps_csv = out_path / f"{args.env}_steps.csv"
+    episodes_csv = out_path / f"{args.env}_episodes.csv"
+
+    # CSV dettagliato: una riga per ogni step di ogni episodio
+    with open(steps_csv, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(all_steps[0].keys()))
+        writer.writeheader()
+        writer.writerows(all_steps)
+
+    # CSV riassuntivo: una riga per episodio
+    with open(episodes_csv, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(all_episodes[0].keys()))
+        writer.writeheader()
+        writer.writerows(all_episodes)
+
+    print(f"\n[INFO] CSV per-step salvato in:    {steps_csv}")
+    print(f"[INFO] CSV per-episodio salvato in: {episodes_csv}")
+
+    # riepilogo finale a schermo
+    rewards = [e["total_reward"] for e in all_episodes]
+    lengths = [e["episode_length"] for e in all_episodes]
+    print(f"\n[RIEPILOGO su {args.episodes} episodi]")
+    print(f"reward media: {np.mean(rewards):.2f} | reward max: {np.max(rewards):.2f} | reward min: {np.min(rewards):.2f}")
+    print(f"lunghezza media: {np.mean(lengths):.2f} | lunghezza max: {np.max(lengths)} | lunghezza min: {np.min(lengths)}")
+
