@@ -34,7 +34,11 @@ class EnviromentWrapperBuilder:
             case "VizdoomMyWayHome-v1":
                 name = "my_way_home"
                 gym_wrapper = Wrapper_Generic
-                
+            
+            case "VizdoomDefendCenter-v1":
+                name = "defend_the_center"
+                gym_wrapper = Wrapper_Generic
+
             case _:
                 raise ValueError(f"cfg `{env_id}` not found")
     
