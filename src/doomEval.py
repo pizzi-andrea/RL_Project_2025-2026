@@ -8,7 +8,7 @@ from math import inf
 
 from globals import *
 from utils import *
-from dd_wrapper import EnviromentWrapperBuilder, DoomMap
+from dd_wrapper import EnviromentWrapperBuilder
 from vizdoom import gymnasium_wrapper
 
 from network.worldModel.dreamer import Dreamer
