@@ -1,0 +1,92 @@
+PER_config:
+  buffer_size: 5000000          # Riallineato a Replay capacity (5 x 10^6)
+  cache: ".perHealtS/"
+
+global_config:
+  multi_cpu: 24
+  max_episode_length: 2100
+  warmup: 0
+  Project_logs: "VizdoomHealthGatheringSupreme" #
+  action_shape: 24
+  att_shape: 7
+  skip_frame: 4
+  img_channels: 3
+  img_size_h : 64
+  img_size_l : 64
+  dreamer_iterations: 320
+  dreamer_w: "weights/VizdoomHealthGatheringSupreme/rssm.ckpt"
+  policy_w : "weights/VizdoomHealthGatheringSupreme/policy.ckpt"
+  chunk: 64                     # Specifica corretta del Batch length (T = 64)
+  precision: "bf16-mixed" 
+  position_gain: 0.01
+  compile: false
+
+  envs:
+    - "VizdoomHealthGatheringSupreme-v1" # VizdoomHealthGathering-v1 VizdoomDeadlyCorridor-v1 VizdoomTakeCover-v1
+
+  envs_episodes:
+    - 30
+
+encoder_config:
+  latent_dim: 512
+  model_dim: 512
+
+curiosity_config:
+  alpha: 0.70
+  beta: 0.4
+  eps: 0.000001
+  p_max: 60
+  c: 0.10
+
+rssm_config:
+  sample_episodes: 128
+  rssm_dataset_path_train: "healts/train"
+  train_steps: 300
+  train_batch: 16               # Corrisponde a Batch size (B = 16)
+  burn_in: 15
+  free_nats: 1.0                # Riallineato a Free nats = 1
+
+  min_buckets: -20
+  max_buckets: 20
+  buckets: 255
+  unimix: 0.01                  # Corrisponde a Latent unimix = 1%
+
+  a_att: 1.0
+  a_obs: 1.0
+  a_cont: 1.0
+  a_rew: 1.0
+
+  detterministic_latent_dim: 512
+  rssm_latent_dim: 512
+  common_latent_dim: 512
+  stochastic_latent: 32
+  stochastic_classes: 32
+  batch_acc: 1
+  
+  beta_dyn: 1.0                 # Corrisponde a Dynamics loss scale = 1
+  beta_pred: 1.0                # Corrisponde a Reconstruction loss scale = 1
+  beta_rep: 0.1                 # Corrisponde a Representation loss scale = 0.1
+  lr: 0.00004                   # Riallineato al Learning rate generale = 4x10^-5
+
+policy_config:
+  sample_episodes: 128
+  train_steps: 300
+  buckets: 255
+  horizon: 15                   # Corrisponde a Imagination horizon = 15
+  burn_in: 15
+  train_batch: 16               # Corrisponde a Batch size (B = 16)
+  batch_acc: 1
+  hidden_dim: 512
+  unimix: 0.01                  # Corrisponde a Actor unimix = 1%
+  actor_entropy: 0.0004         # Corrisponde a Actor entropy regularizer = 3x10^-4
+  min_buckets: -20
+  max_buckets: 20
+  
+  # --- Parametri Critici Riallineati dal Paper ---
+  lr_actor: 0.00004             # Innalzato a 4x10^-5 (Era a 3e-5)
+  lr_critic: 0.00004            # Innalzato a 4x10^-5 (Era a 3e-5)
+  gamma: 0.997                  # Derivato dal Discount Horizon: 1/(1-0.997) ≈ 333
+  
+  critic_ema_decay: 0.98        # Corrisponde a Critic EMA decay = 0.98 (Per la rete slow target)
+  retnorm_decay: 0.99           # Corrisponde a Actor RetNorm decay = 0.99 (Per l'EMAScalar, era a 0.98)
+  retnorm_limit: 1.0            # Corrisponde a Actor RetNorm limit (L = 1), sostituisce il vecchio ema_epsilon

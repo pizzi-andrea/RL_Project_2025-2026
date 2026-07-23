@@ -225,3 +225,10 @@ src/**/*.png
 src/**/*.npz
 src/**/*.csv
 *.ckpt
+src/DoomBasic/**
+src/VizdoomDeadlyCorridor/**
+src/VizdoomDefendCenter/**
+src/VizdoomHealthGathering/**
+src/VizdoomHealthGatheringSupreme/**
+src/VizdoomMyWayHome/**
+src/VizdoomTakeCover/**
